@@ -8,6 +8,9 @@
   },
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=24.16.0 <25 || >=26.1.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:test": "tsc -p tsconfig.test.json",
@@ -25,7 +28,7 @@
   "devDependencies": {
     "openclaw": "2026.9.3",
     "typescript": "^5.9.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^26.0.0"
   },
   "openclaw": {
     "extensions": ["./dist/index.js"],
