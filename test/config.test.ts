@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { resolveConfig } from "../src/config.js";
+
+test("resolveConfig: everything defaults to the safe/off option when unset", () => {
+  const config = resolveConfig(undefined, "/default/dir");
+  assert.deepEqual(config, {
+    enabled: false,
+    outputDir: "/default/dir",
+    captureContent: false,
+    captureIdentifiers: false,
+    maxOutputBytes: 500 * 1024 * 1024,
+    maxAgeDays: 14,
+  });
+});
+
+test("resolveConfig: explicit values override defaults", () => {
+  const config = resolveConfig(
+    {
+      enabled: true,
+      outputDir: "/custom/dir",
+      captureContent: true,
+      captureIdentifiers: true,
+      maxOutputBytes: 1000,
+      maxAgeDays: 3,
+    },
+    "/default/dir",
+  );
+  assert.equal(config.enabled, true);
+  assert.equal(config.outputDir, "/custom/dir");
+  assert.equal(config.captureContent, true);
+  assert.equal(config.captureIdentifiers, true);
+  assert.equal(config.maxOutputBytes, 1000);
+  assert.equal(config.maxAgeDays, 3);
+});
+
+test("resolveConfig: wrong-typed values fall back to defaults rather than propagating garbage", () => {
+  const config = resolveConfig(
+    { enabled: "yes", outputDir: 42, maxOutputBytes: "lots", maxAgeDays: -5 } as unknown as Record<
+      string,
+      unknown
+    >,
+    "/default/dir",
+  );
+  assert.equal(config.enabled, false);
+  assert.equal(config.outputDir, "/default/dir");
+  assert.equal(config.maxOutputBytes, 500 * 1024 * 1024);
+  assert.equal(config.maxAgeDays, 14); // -5 is not > 0, so it doesn't count as a valid override
+});
+
+test("resolveConfig: empty-string outputDir does not override the default", () => {
+  const config = resolveConfig({ outputDir: "" }, "/default/dir");
+  assert.equal(config.outputDir, "/default/dir");
+});

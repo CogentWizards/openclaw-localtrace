@@ -1,0 +1,43 @@
+{
+  "id": "openclaw-localtrace",
+  "name": "OpenClaw Localtrace",
+  "description": "Full-fidelity OpenTelemetry capture written only to your local filesystem -- no redaction, no network export, no third-party backend.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master on/off switch. Off by default -- this plugin only ever does something once explicitly enabled."
+      },
+      "outputDir": {
+        "type": "string",
+        "description": "Local directory to write OTLP JSON batch files into. Defaults to a subdirectory of this plugin's own OpenClaw-managed state directory when omitted."
+      },
+      "captureContent": {
+        "type": "boolean",
+        "default": false,
+        "description": "Include raw prompt/response/tool-argument/tool-result content on spans. Off by default -- see README before enabling."
+      },
+      "captureIdentifiers": {
+        "type": "boolean",
+        "default": false,
+        "description": "Include sessionId/runId/callId on spans and metrics. Off by default even though this is the plugin's whole purpose -- a local file with real session identifiers is still real data at rest. See README before enabling."
+      },
+      "maxOutputBytes": {
+        "type": "number",
+        "default": 524288000,
+        "description": "Retention ceiling in bytes for the output directory (default 500 MiB). Oldest files are deleted first once exceeded."
+      },
+      "maxAgeDays": {
+        "type": "number",
+        "default": 14,
+        "description": "Delete output files older than this many days, checked on a periodic sweep."
+      }
+    }
+  }
+}

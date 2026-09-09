@@ -1,0 +1,51 @@
+{
+  "name": "openclaw-localtrace",
+  "version": "0.1.0",
+  "description": "Full-fidelity OpenTelemetry capture for OpenClaw, written to your local filesystem only -- no redaction, no network export, no third-party backend.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CogentWizards/openclaw-localtrace"
+  },
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && node --test dist-test/test/",
+    "validate": "openclaw plugins validate --json",
+    "pack": "openclaw plugins pack --json"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/core": "2.10.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-trace-base": "2.10.0",
+    "@opentelemetry/semantic-conventions": "1.43.0"
+  },
+  "devDependencies": {
+    "openclaw": "2026.9.3",
+    "typescript": "^5.9.0",
+    "@types/node": "^22.0.0"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "install": {
+      "npmSpec": "openclaw-localtrace",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.25"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.3"
+    },
+    "build": {
+      "openclawVersion": "2026.9.3"
+    }
+  },
+  "files": ["dist/**", "openclaw.plugin.json", "README.md", "LICENSE"],
+  "peerDependencies": {
+    "openclaw": ">=2026.9.3"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": { "optional": true }
+  }
+}
