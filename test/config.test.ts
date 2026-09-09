@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveConfig } from "../src/config.js";
+import { DEFAULT_MUTATING_TOOL_NAMES, resolveConfig } from "../src/config.js";
 
 test("resolveConfig: everything defaults to the safe/off option when unset", () => {
   const config = resolveConfig(undefined, "/default/dir");
@@ -11,7 +11,18 @@ test("resolveConfig: everything defaults to the safe/off option when unset", () 
     captureIdentifiers: false,
     maxOutputBytes: 500 * 1024 * 1024,
     maxAgeDays: 14,
+    mutatingToolNames: DEFAULT_MUTATING_TOOL_NAMES,
   });
+});
+
+test("resolveConfig: mutatingToolNames overrides the default list", () => {
+  const config = resolveConfig({ mutatingToolNames: ["custom_write"] }, "/default/dir");
+  assert.deepEqual(config.mutatingToolNames, ["custom_write"]);
+});
+
+test("resolveConfig: a non-string-array mutatingToolNames falls back to the default", () => {
+  const config = resolveConfig({ mutatingToolNames: ["ok", 42] } as unknown as Record<string, unknown>, "/default/dir");
+  assert.deepEqual(config.mutatingToolNames, DEFAULT_MUTATING_TOOL_NAMES);
 });
 
 test("resolveConfig: explicit values override defaults", () => {

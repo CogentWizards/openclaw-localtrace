@@ -102,7 +102,7 @@ export interface OtlpMetricPointJson {
   attributes: OtlpKeyValue[];
 }
 
-export interface OtlpMetricJson {
+export interface OtlpSumMetricJson {
   name: string;
   description: string;
   unit: string;
@@ -112,6 +112,21 @@ export interface OtlpMetricJson {
     isMonotonic: boolean;
   };
 }
+
+/** A point-in-time, non-cumulative measurement -- e.g. one turn's
+ * estimated cost, which isn't additive across data points the way a
+ * running total is. The technically-correct OTLP shape for that is
+ * Gauge, not (non-monotonic) Sum. */
+export interface OtlpGaugeMetricJson {
+  name: string;
+  description: string;
+  unit: string;
+  gauge: {
+    dataPoints: OtlpMetricPointJson[];
+  };
+}
+
+export type OtlpMetricJson = OtlpSumMetricJson | OtlpGaugeMetricJson;
 
 export function metricsDocument(
   metrics: OtlpMetricJson[],

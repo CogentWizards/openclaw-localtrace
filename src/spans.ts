@@ -1,43 +1,159 @@
 /**
- * Maps OpenClaw's internal diagnostic events to real OTel spans, keeping
- * exactly the identifiers @openclaw/diagnostics-otel's DROPPED_OTEL_ATTRIBUTE_KEYS
- * deny-list removes -- sessionId, runId, callId, toolCallId -- gated
- * behind `captureIdentifiers` (off by default; see config.ts), plus
- * `mutatingAction` as a direct write signal no existing redundo source
- * has ever had access to.
+ * Maps OpenClaw's typed plugin *hooks* (api.on(...), registered in
+ * register(api)) to real OTel spans -- this replaced an earlier design
+ * built on ctx.internalDiagnostics, which turned out to be gated behind a
+ * hardcoded check against exactly two literal service ids
+ * ("diagnostics-otel", "diagnostics-prometheus"), unreachable by any
+ * third-party plugin regardless of install method or trust level (see
+ * the plan's "BLOCKED at checkpoint 4/5" section for how that was found
+ * and confirmed live). The hook surface used here is a genuinely
+ * different, documented, third-party-accessible permission model: a
+ * conversation-access hook is unlocked per-plugin by the plugin's own
+ * operator setting `plugins.entries.<id>.hooks.allowConversationAccess:
+ * true` in their own openclaw.json -- confirmed clean by reading the
+ * actual enforcement code (`resolveConversationAccessAllowed` in
+ * hook-policy-decisions.ts): no catalog lookup, no literal plugin-id
+ * check, just that one config key.
+ *
+ * The exact hook event/context shapes (PluginHookBeforeToolCallEvent,
+ * PluginHookAfterToolCallEvent, PluginHookToolContext,
+ * PluginHookAgentContext, PluginHookBeforeAgentRunEvent,
+ * PluginHookAgentEndEvent, PluginHookModelCallStartedEvent,
+ * PluginHookModelCallEndedEvent, PluginHookLlmInputEvent,
+ * PluginHookLlmOutputEvent) are confirmed by direct inspection of
+ * OpenClaw's compiled type declarations, but are NOT part of any
+ * publicly exported `openclaw/plugin-sdk/*` subpath -- only
+ * `OpenClawPluginApi` itself (whose `on` method references them
+ * structurally) is exported. This module therefore declares its own
+ * local, duck-typed interfaces matching the confirmed real shapes
+ * (named *Event/*Context below) instead of importing them; TypeScript's
+ * structural typing accepts the real, wider objects `api.on(...)` hands
+ * back at each call site as long as the fields this module actually
+ * reads line up, so this stays type-checked without a nominal import.
  *
  * v1 scope is deliberately narrower than @openclaw/diagnostics-otel's own
- * (which maps ~45 event types for general Gateway observability): only
- * the four families redundo's Event schema actually needs become spans --
- * harness.run, run, model.call, tool.execution. Everything else is
- * uncounted in v1, a deliberate scope decision, not a limitation
- * inherited from the old exporter.
+ * (~45 event types for general Gateway observability): only four span
+ * families, matching what redundo's Event schema needs --
+ * run, model.call, tool.execution (three), because that's what the hook
+ * catalog actually offers as a run-boundary/model-call/tool-call triad;
+ * the diagnostics-bus design's separate "harness.run" level does not
+ * have a hook analogue and is deliberately collapsed into "run" here
+ * (before_agent_run opens it, agent_end closes it).
  *
- * Span hierarchy, inferred from the real correlation keys available (not
- * ambient/automatic context propagation -- diagnostic events arrive
- * async, addressed only by these ids): run (by runId) is outermost;
- * harness.run (same runId) nests under it; model.call/tool.execution
- * (same runId) nest under whichever of those two is currently open for
- * that runId, preferring the more specific harness.run. This mirrors
- * the existing Python-side adapter's own structural assumption
- * (sources/openclaw.py's _workflow_of walks up to the nearest
- * openclaw.harness.run ancestor) -- but is a first-cut heuristic, not
- * verified against live captured output yet. Expect to revisit once
- * this plugin actually runs against a real Gateway (see the plan's
- * safe-development-sequence checkpoint 4/5).
+ * Correlation keys, and why they differ per span family:
+ * - run: keyed by `ctx.runId ?? "session:" + ctx.sessionKey` -- runId is
+ *   optional on PluginHookAgentContext ("populated when OpenClaw can
+ *   identify the active run"), so this falls back to sessionKey when
+ *   absent. A first-cut heuristic, not yet verified against live output
+ *   (see the plan's safe-development-sequence checkpoint 4/5).
+ * - model.call: keyed by `callId` from model_call_started/ended, which
+ *   is NOT gated behind allowConversationAccess at all (sanitized,
+ *   no-content hooks) -- span open/close/timing/outcome therefore works
+ *   even when the operator hasn't granted conversation access.
+ *   llm_input/llm_output (gated) only ever *enrich* an already-open
+ *   model.call span for the same runId; if no such span is open when
+ *   they arrive (permission not granted, or an ordering surprise), the
+ *   event is silently dropped rather than fabricating a span --
+ *   redundo's own "no confident wrong answer" discipline, applied here.
+ * - tool.execution: keyed by `toolCallId` from before_tool_call/
+ *   after_tool_call, neither of which needs any permission opt-in at
+ *   all (confirmed: neither name is in the host's conversation-hook
+ *   gate set).
  */
 
 import { ROOT_CONTEXT, SpanKind, SpanStatusCode, trace, type Attributes, type Span } from "@opentelemetry/api";
 import type { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { LocaltraceConfig } from "./config.js";
 import { pruneUndefined } from "./utils.js";
 
 const TRACER_NAME = "openclaw-localtrace";
+
+// --- Local, duck-typed hook event/context shapes -- see module docstring. ---
+
+export interface AgentContext {
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  channelId?: string;
+  accountId?: string;
+  channel?: string;
+}
+
+export interface BeforeAgentRunEvent {
+  prompt: string;
+  accountId?: string;
+  channelId?: string;
+  senderId?: string;
+}
+
+export interface AgentEndEvent {
+  runId?: string;
+  success: boolean;
+  error?: string;
+  durationMs?: number;
+}
+
+export interface ToolContext {
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  toolCallId?: string;
+}
+
+export interface BeforeToolCallEvent {
+  toolName: string;
+  params: Record<string, unknown>;
+  runId?: string;
+  toolCallId?: string;
+}
+
+export interface AfterToolCallEvent {
+  toolName: string;
+  params: Record<string, unknown>;
+  runId?: string;
+  toolCallId?: string;
+  result?: unknown;
+  error?: string;
+  durationMs?: number;
+}
+
+export interface ModelCallBaseEvent {
+  runId: string;
+  callId: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+  contextTokenBudget?: number;
+}
+
+export interface ModelCallEndedEvent extends ModelCallBaseEvent {
+  durationMs: number;
+  outcome: "completed" | "error";
+  errorCategory?: string;
+}
+
+export interface LlmInputEvent {
+  runId: string;
+  systemPrompt?: string;
+  prompt: string;
+  historyMessages: unknown[];
+}
+
+export interface LlmOutputEvent {
+  runId: string;
+  assistantTexts: string[];
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+}
+
+// --- Span bookkeeping ---
 
 class SpanTracker {
   private readonly byKey = new Map<string, Span>();
@@ -58,24 +174,28 @@ class SpanTracker {
   }
 }
 
-function msToHrTimeInput(ms: number): number {
-  return ms;
-}
-
 function parentContextFor(parent: Span | undefined) {
   if (!parent) return ROOT_CONTEXT;
   return trace.setSpanContext(ROOT_CONTEXT, parent.spanContext());
 }
 
-/** Handles the diagnostic-event stream for one plugin lifetime, tracking
- * in-flight spans and ending them as matching completion events arrive.
- */
+function runKey(ctx: { runId?: string; sessionKey?: string }): string | undefined {
+  if (ctx.runId !== undefined) return ctx.runId;
+  if (ctx.sessionKey !== undefined) return `session:${ctx.sessionKey}`;
+  return undefined;
+}
+
+/** Handles the hook-event stream for one plugin lifetime, tracking
+ * in-flight spans and ending them as matching completion events arrive. */
 export class SpanMapper {
   private readonly tracer;
   private readonly config: LocaltraceConfig;
   private readonly runSpans = new SpanTracker();
-  private readonly harnessRunSpans = new SpanTracker();
   private readonly modelCallSpans = new SpanTracker();
+  /** Most recently opened, not-yet-closed model.call span per runId --
+   * used to attach llm_input/llm_output content, which carries no callId
+   * of its own. Sequential-call assumption: see module docstring. */
+  private readonly openModelCallByRun = new Map<string, string>();
   private readonly toolExecutionSpans = new SpanTracker();
 
   constructor(provider: BasicTracerProvider, config: LocaltraceConfig) {
@@ -83,89 +203,59 @@ export class SpanMapper {
     this.config = config;
   }
 
-  private parentFor(runId: string | undefined): Span | undefined {
-    if (runId === undefined) return undefined;
-    return this.harnessRunSpans.peek(runId) ?? this.runSpans.peek(runId);
-  }
-
   private identifierAttrs(ids: Record<string, string | undefined>): Attributes {
     if (!this.config.captureIdentifiers) return {};
     return pruneUndefined(ids);
   }
 
-  handle(event: DiagnosticEventPayload, _metadata: DiagnosticEventMetadata, privateData: DiagnosticEventPrivateData): void {
-    switch (event.type) {
-      case "run.started": {
-        const span = this.tracer.startSpan(
-          "openclaw-localtrace.run",
-          {
-            kind: SpanKind.INTERNAL,
-            startTime: msToHrTimeInput(event.ts),
-            attributes: pruneUndefined({
-              "openclaw.provider": event.provider,
-              "openclaw.model": event.model,
-              "openclaw.channel": event.channel,
-              "openclaw.trigger": event.trigger,
-              ...this.identifierAttrs({ "openclaw.runId": event.runId, "openclaw.sessionId": event.sessionId }),
-            }),
-          },
-          ROOT_CONTEXT,
-        );
-        this.runSpans.start(event.runId, span);
-        return;
-      }
-      case "run.completed": {
-        const span = this.runSpans.take(event.runId);
-        if (!span) return;
-        span.setAttribute("openclaw.outcome", event.outcome);
-        if (event.errorCategory) span.setAttribute("openclaw.errorCategory", event.errorCategory);
-        span.setStatus({ code: event.outcome === "completed" ? SpanStatusCode.OK : SpanStatusCode.ERROR });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
+  private mutatingAction(toolName: string): boolean {
+    return this.config.mutatingToolNames.includes(toolName);
+  }
 
-      case "harness.run.started": {
-        const parent = this.parentFor(event.runId);
-        const span = this.tracer.startSpan(
-          "openclaw-localtrace.harness.run",
-          {
-            kind: SpanKind.INTERNAL,
-            startTime: msToHrTimeInput(event.ts),
-            attributes: pruneUndefined({
-              "openclaw.harnessId": event.harnessId,
-              "openclaw.pluginId": event.pluginId,
-              "openclaw.provider": event.provider,
-              "openclaw.model": event.model,
-              "openclaw.channel": event.channel,
-              ...this.identifierAttrs({ "openclaw.runId": event.runId, "openclaw.sessionId": event.sessionId }),
-            }),
-          },
-          parentContextFor(parent),
-        );
-        this.harnessRunSpans.start(event.runId, span);
-        return;
-      }
-      case "harness.run.completed": {
-        const span = this.harnessRunSpans.take(event.runId);
-        if (!span) return;
-        span.setAttribute("openclaw.outcome", event.outcome);
-        if (event.resultClassification) span.setAttribute("openclaw.resultClassification", event.resultClassification);
-        span.setStatus({ code: event.outcome === "completed" ? SpanStatusCode.OK : SpanStatusCode.ERROR });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
-      case "harness.run.error": {
-        const span = this.harnessRunSpans.take(event.runId);
-        if (!span) return;
-        span.setAttribute("openclaw.errorCategory", event.errorCategory);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: event.errorCategory });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
+  onBeforeAgentRun(event: BeforeAgentRunEvent, ctx: AgentContext): void {
+    const key = runKey(ctx);
+    if (key === undefined) return; // no correlation id at all -- can't track this run
+    const span = this.tracer.startSpan(
+      "openclaw-localtrace.run",
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: pruneUndefined({
+          "openclaw.channel": ctx.channel,
+          "openclaw.channelId": ctx.channelId ?? event.channelId,
+          ...this.identifierAttrs({
+            "openclaw.runId": ctx.runId,
+            "openclaw.sessionId": ctx.sessionId,
+          }),
+        }),
+      },
+      ROOT_CONTEXT,
+    );
+    this.runSpans.start(key, span);
+  }
 
-      case "model.call.started": {
-        const parent = this.parentFor(event.runId);
-        const attributes: Attributes = pruneUndefined({
+  onAgentEnd(event: AgentEndEvent, ctx: AgentContext): void {
+    const key = runKey(ctx) ?? (event.runId !== undefined ? event.runId : undefined);
+    if (key === undefined) return;
+    const span = this.runSpans.take(key);
+    if (!span) return;
+    span.setAttribute("openclaw.success", event.success);
+    if (event.error) span.setAttribute("openclaw.error", event.error);
+    span.setStatus({ code: event.success ? SpanStatusCode.OK : SpanStatusCode.ERROR });
+    span.end();
+  }
+
+  private parentForRun(ctx: { runId?: string; sessionKey?: string }): Span | undefined {
+    const key = runKey(ctx);
+    return key !== undefined ? this.runSpans.peek(key) : undefined;
+  }
+
+  onModelCallStarted(event: ModelCallBaseEvent): void {
+    const parent = this.parentForRun({ runId: event.runId });
+    const span = this.tracer.startSpan(
+      "openclaw-localtrace.model.call",
+      {
+        kind: SpanKind.CLIENT,
+        attributes: pruneUndefined({
           "openclaw.provider": event.provider,
           "openclaw.model": event.model,
           "openclaw.api": event.api,
@@ -175,125 +265,90 @@ export class SpanMapper {
             "openclaw.sessionId": event.sessionId,
             "openclaw.callId": event.callId,
           }),
-        });
-        if (this.config.captureContent && privateData.modelContent) {
-          if (privateData.modelContent.inputMessages !== undefined) {
-            attributes["gen_ai.input.messages"] = JSON.stringify(privateData.modelContent.inputMessages);
-          }
-          if (privateData.modelContent.toolDefinitions !== undefined) {
-            attributes["gen_ai.tool.definitions"] = JSON.stringify(privateData.modelContent.toolDefinitions);
-          }
-        }
-        const span = this.tracer.startSpan(
-          "openclaw-localtrace.model.call",
-          { kind: SpanKind.CLIENT, startTime: msToHrTimeInput(event.ts), attributes },
-          parentContextFor(parent),
-        );
-        this.modelCallSpans.start(event.callId, span);
-        return;
-      }
-      case "model.call.completed": {
-        const span = this.modelCallSpans.take(event.callId);
-        if (!span) return;
-        if (event.usage) {
-          if (event.usage.input !== undefined) span.setAttribute("gen_ai.usage.input_tokens", event.usage.input);
-          if (event.usage.output !== undefined) span.setAttribute("gen_ai.usage.output_tokens", event.usage.output);
-          if (event.usage.cacheRead !== undefined) span.setAttribute("gen_ai.usage.cache_read.input_tokens", event.usage.cacheRead);
-          if (event.usage.cacheWrite !== undefined) span.setAttribute("gen_ai.usage.cache_creation.input_tokens", event.usage.cacheWrite);
-        }
-        if (this.config.captureContent && privateData.modelContent?.outputMessages !== undefined) {
-          span.setAttribute("gen_ai.output.messages", JSON.stringify(privateData.modelContent.outputMessages));
-        }
-        span.setStatus({ code: SpanStatusCode.OK });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
-      case "model.call.error": {
-        const span = this.modelCallSpans.take(event.callId);
-        if (!span) return;
-        span.setAttribute("openclaw.errorCategory", event.errorCategory);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: event.errorCategory });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
+        }),
+      },
+      parentContextFor(parent),
+    );
+    this.modelCallSpans.start(event.callId, span);
+    this.openModelCallByRun.set(event.runId, event.callId);
+  }
 
-      case "tool.execution.started": {
-        const parent = this.parentFor(event.runId);
-        const attributes: Attributes = pruneUndefined({
-          "openclaw.toolName": event.toolName,
-          "openclaw.toolSource": event.toolSource,
-          "openclaw.toolOwner": event.toolOwner,
-          // The single most valuable capability unlock in this plugin: a
-          // real write/mutation signal, always unknown from every other
-          // redundo source. Never gated behind captureIdentifiers -- it's
-          // a boolean classification, not an identifier.
-          "openclaw.mutatingAction": event.mutatingAction,
-          ...this.identifierAttrs({
-            "openclaw.runId": event.runId,
-            "openclaw.sessionId": event.sessionId,
-            "openclaw.toolCallId": event.toolCallId,
-          }),
-        });
-        if (this.config.captureContent && privateData.toolContent?.toolInput !== undefined) {
-          attributes["gen_ai.tool.call.arguments"] = JSON.stringify(privateData.toolContent.toolInput);
-        }
-        const span = this.tracer.startSpan(
-          "openclaw-localtrace.tool.execution",
-          { kind: SpanKind.INTERNAL, startTime: msToHrTimeInput(event.ts), attributes },
-          parentContextFor(parent),
-        );
-        if (event.toolCallId) this.toolExecutionSpans.start(event.toolCallId, span);
-        else span.end(msToHrTimeInput(event.ts)); // no correlation id -- can't match a later completion, close now
-        return;
-      }
-      case "tool.execution.completed": {
-        const span = event.toolCallId ? this.toolExecutionSpans.take(event.toolCallId) : undefined;
-        if (!span) return;
-        if (this.config.captureContent && privateData.toolContent?.toolOutput !== undefined) {
-          span.setAttribute("gen_ai.tool.call.result", JSON.stringify(privateData.toolContent.toolOutput));
-        }
-        span.setStatus({ code: SpanStatusCode.OK });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
-      case "tool.execution.error": {
-        const span = event.toolCallId ? this.toolExecutionSpans.take(event.toolCallId) : undefined;
-        if (!span) return;
-        span.setAttribute("openclaw.errorCategory", event.errorCategory);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: event.errorCategory });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
-      case "tool.execution.blocked": {
-        // A blocked call never executes, so there's no "started" span to
-        // find and no "completed" to wait for -- the whole event is one
-        // instant. Same discipline as sources/openclaw.py's own handling
-        // of this case: surface it directly, the one place it can go.
-        const parent = this.parentFor(event.runId);
-        const span = this.tracer.startSpan(
-          "openclaw-localtrace.tool.execution",
-          {
-            kind: SpanKind.INTERNAL,
-            startTime: msToHrTimeInput(event.ts),
-            attributes: pruneUndefined({
-              "openclaw.toolName": event.toolName,
-              "openclaw.outcome": "blocked",
-              "openclaw.deniedReason": event.deniedReason,
-              ...this.identifierAttrs({
-                "openclaw.runId": event.runId,
-                "openclaw.sessionId": event.sessionId,
-                "openclaw.toolCallId": event.toolCallId,
-              }),
-            }),
-          },
-          parentContextFor(parent),
-        );
-        span.setStatus({ code: SpanStatusCode.ERROR, message: "blocked" });
-        span.end(msToHrTimeInput(event.ts));
-        return;
-      }
-      default:
-        return; // out of v1 scope -- see module docstring
+  onModelCallEnded(event: ModelCallEndedEvent): void {
+    const span = this.modelCallSpans.take(event.callId);
+    if (this.openModelCallByRun.get(event.runId) === event.callId) {
+      this.openModelCallByRun.delete(event.runId);
     }
+    if (!span) return;
+    if (event.errorCategory) span.setAttribute("openclaw.errorCategory", event.errorCategory);
+    span.setStatus({ code: event.outcome === "completed" ? SpanStatusCode.OK : SpanStatusCode.ERROR });
+    span.end();
+  }
+
+  onLlmInput(event: LlmInputEvent): void {
+    const callId = this.openModelCallByRun.get(event.runId);
+    const span = callId !== undefined ? this.modelCallSpans.peek(callId) : undefined;
+    if (!span) return; // no open model.call span for this run -- drop, don't fabricate
+    if (!this.config.captureContent) return;
+    if (event.systemPrompt !== undefined) span.setAttribute("gen_ai.system_prompt", event.systemPrompt);
+    span.setAttribute("gen_ai.input.messages", JSON.stringify([{ prompt: event.prompt, history: event.historyMessages }]));
+  }
+
+  onLlmOutput(event: LlmOutputEvent): void {
+    const callId = this.openModelCallByRun.get(event.runId);
+    const span = callId !== undefined ? this.modelCallSpans.peek(callId) : undefined;
+    if (!span) return;
+    if (event.usage) {
+      if (event.usage.input !== undefined) span.setAttribute("gen_ai.usage.input_tokens", event.usage.input);
+      if (event.usage.output !== undefined) span.setAttribute("gen_ai.usage.output_tokens", event.usage.output);
+      if (event.usage.cacheRead !== undefined) span.setAttribute("gen_ai.usage.cache_read.input_tokens", event.usage.cacheRead);
+      if (event.usage.cacheWrite !== undefined) span.setAttribute("gen_ai.usage.cache_creation.input_tokens", event.usage.cacheWrite);
+    }
+    if (this.config.captureContent) {
+      span.setAttribute("gen_ai.output.messages", JSON.stringify(event.assistantTexts));
+    }
+  }
+
+  onBeforeToolCall(event: BeforeToolCallEvent, ctx: ToolContext): void {
+    const attributes: Attributes = pruneUndefined({
+      "openclaw.toolName": event.toolName,
+      // A real host-computed write/mutation signal doesn't exist on this
+      // hook (unlike the old diagnostics-bus event) -- see config.ts's
+      // DEFAULT_MUTATING_TOOL_NAMES. Never gated behind captureIdentifiers:
+      // it's a boolean classification, not an identifier.
+      "openclaw.mutatingAction": this.mutatingAction(event.toolName),
+      ...this.identifierAttrs({
+        "openclaw.runId": ctx.runId ?? event.runId,
+        "openclaw.sessionId": ctx.sessionId,
+        "openclaw.toolCallId": ctx.toolCallId ?? event.toolCallId,
+      }),
+    });
+    if (this.config.captureContent) {
+      attributes["gen_ai.tool.call.arguments"] = JSON.stringify(event.params);
+    }
+    const parent = this.parentForRun({ runId: ctx.runId ?? event.runId, sessionKey: ctx.sessionKey });
+    const span = this.tracer.startSpan(
+      "openclaw-localtrace.tool.execution",
+      { kind: SpanKind.INTERNAL, attributes },
+      parentContextFor(parent),
+    );
+    const toolCallId = ctx.toolCallId ?? event.toolCallId;
+    if (toolCallId) this.toolExecutionSpans.start(toolCallId, span);
+    else span.end(); // no correlation id -- can't match a later completion, close now
+  }
+
+  onAfterToolCall(event: AfterToolCallEvent, ctx: ToolContext): void {
+    const toolCallId = ctx.toolCallId ?? event.toolCallId;
+    const span = toolCallId !== undefined ? this.toolExecutionSpans.take(toolCallId) : undefined;
+    if (!span) return;
+    if (event.error) {
+      span.setAttribute("openclaw.error", event.error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: event.error });
+    } else {
+      if (this.config.captureContent && event.result !== undefined) {
+        span.setAttribute("gen_ai.tool.call.result", JSON.stringify(event.result));
+      }
+      span.setStatus({ code: SpanStatusCode.OK });
+    }
+    span.end();
   }
 }
