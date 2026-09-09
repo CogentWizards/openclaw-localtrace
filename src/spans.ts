@@ -32,29 +32,39 @@
  * reads line up, so this stays type-checked without a nominal import.
  *
  * v1 scope is deliberately narrower than @openclaw/diagnostics-otel's own
- * (~45 event types for general Gateway observability): only four span
- * families, matching what redundo's Event schema needs --
- * run, model.call, tool.execution (three), because that's what the hook
- * catalog actually offers as a run-boundary/model-call/tool-call triad;
- * the diagnostics-bus design's separate "harness.run" level does not
- * have a hook analogue and is deliberately collapsed into "run" here
- * (before_agent_run opens it, agent_end closes it).
+ * (~45 event types for general Gateway observability): five span
+ * families, matching what redundo's Event schema needs -- run, model.call,
+ * llm.call, tool.execution -- because that's what the hook catalog
+ * actually offers; the diagnostics-bus design's separate "harness.run"
+ * level does not have a hook analogue and is deliberately collapsed into
+ * "run" here (before_agent_run opens it, agent_end closes it).
  *
  * Correlation keys, and why they differ per span family:
  * - run: keyed by `ctx.runId ?? "session:" + ctx.sessionKey` -- runId is
  *   optional on PluginHookAgentContext ("populated when OpenClaw can
  *   identify the active run"), so this falls back to sessionKey when
- *   absent. A first-cut heuristic, not yet verified against live output
- *   (see the plan's safe-development-sequence checkpoint 4/5).
+ *   absent. Verified live against a real Gateway (checkpoint 4/5):
+ *   spans correctly nest under one run per turn.
  * - model.call: keyed by `callId` from model_call_started/ended, which
  *   is NOT gated behind allowConversationAccess at all (sanitized,
  *   no-content hooks) -- span open/close/timing/outcome therefore works
  *   even when the operator hasn't granted conversation access.
- *   llm_input/llm_output (gated) only ever *enrich* an already-open
- *   model.call span for the same runId; if no such span is open when
- *   they arrive (permission not granted, or an ordering surprise), the
- *   event is silently dropped rather than fabricating a span --
- *   redundo's own "no confident wrong answer" discipline, applied here.
+ * - llm.call: keyed by `runId` from llm_input/llm_output. **Originally
+ *   designed to enrich the open model.call span for the same runId --
+ *   confirmed WRONG by live testing.** llm_input fires *before*
+ *   model_call_started, and llm_output fires *after* model_call_ended,
+ *   bracketing a wider window rather than nesting inside model.call's
+ *   own boundary. Since OTel spans reject attribute writes after
+ *   `.end()`, there is no way to retroactively enrich an already-closed
+ *   model.call span once llm_output arrives -- confirmed by a real
+ *   traces file with the intended `gen_ai.*` attributes silently
+ *   missing. Fixed by giving llm_input/llm_output their own independent
+ *   span, a sibling of model.call under the same run, rather than
+ *   trying to merge into it. Gated behind allowConversationAccess; if no
+ *   open llm.call span exists for a runId when llm_output arrives
+ *   (permission not granted, or an ordering surprise), the event is
+ *   silently dropped rather than fabricating a span -- redundo's own
+ *   "no confident wrong answer" discipline, applied here.
  * - tool.execution: keyed by `toolCallId` from before_tool_call/
  *   after_tool_call, neither of which needs any permission opt-in at
  *   all (confirmed: neither name is in the host's conversation-hook
@@ -192,10 +202,17 @@ export class SpanMapper {
   private readonly config: LocaltraceConfig;
   private readonly runSpans = new SpanTracker();
   private readonly modelCallSpans = new SpanTracker();
-  /** Most recently opened, not-yet-closed model.call span per runId --
-   * used to attach llm_input/llm_output content, which carries no callId
-   * of its own. Sequential-call assumption: see module docstring. */
-  private readonly openModelCallByRun = new Map<string, string>();
+  /** Keyed by runId, not callId -- llm_input/llm_output carry no callId of
+   * their own. Confirmed via live testing that these do NOT nest inside
+   * model_call_started/ended's own boundary the way the module docstring
+   * originally assumed: llm_input fires BEFORE model_call_started, and
+   * llm_output fires AFTER model_call_ended -- i.e. they bracket a wider
+   * window, not a narrower one nested inside it. Since OTel spans reject
+   * attribute writes after .end(), there is no way to retroactively
+   * enrich an already-closed model.call span once llm_output arrives.
+   * This is therefore its own independent span, a sibling of model.call
+   * under the same run, not an enrichment of it. */
+  private readonly llmCallSpans = new SpanTracker();
   private readonly toolExecutionSpans = new SpanTracker();
 
   constructor(provider: BasicTracerProvider, config: LocaltraceConfig) {
@@ -270,14 +287,10 @@ export class SpanMapper {
       parentContextFor(parent),
     );
     this.modelCallSpans.start(event.callId, span);
-    this.openModelCallByRun.set(event.runId, event.callId);
   }
 
   onModelCallEnded(event: ModelCallEndedEvent): void {
     const span = this.modelCallSpans.take(event.callId);
-    if (this.openModelCallByRun.get(event.runId) === event.callId) {
-      this.openModelCallByRun.delete(event.runId);
-    }
     if (!span) return;
     if (event.errorCategory) span.setAttribute("openclaw.errorCategory", event.errorCategory);
     span.setStatus({ code: event.outcome === "completed" ? SpanStatusCode.OK : SpanStatusCode.ERROR });
@@ -285,18 +298,23 @@ export class SpanMapper {
   }
 
   onLlmInput(event: LlmInputEvent): void {
-    const callId = this.openModelCallByRun.get(event.runId);
-    const span = callId !== undefined ? this.modelCallSpans.peek(callId) : undefined;
-    if (!span) return; // no open model.call span for this run -- drop, don't fabricate
-    if (!this.config.captureContent) return;
-    if (event.systemPrompt !== undefined) span.setAttribute("gen_ai.system_prompt", event.systemPrompt);
-    span.setAttribute("gen_ai.input.messages", JSON.stringify([{ prompt: event.prompt, history: event.historyMessages }]));
+    const parent = this.parentForRun({ runId: event.runId });
+    const attributes: Attributes = {};
+    if (this.config.captureContent) {
+      if (event.systemPrompt !== undefined) attributes["gen_ai.system_prompt"] = event.systemPrompt;
+      attributes["gen_ai.input.messages"] = JSON.stringify([{ prompt: event.prompt, history: event.historyMessages }]);
+    }
+    const span = this.tracer.startSpan(
+      "openclaw-localtrace.llm.call",
+      { kind: SpanKind.CLIENT, attributes },
+      parentContextFor(parent),
+    );
+    this.llmCallSpans.start(event.runId, span);
   }
 
   onLlmOutput(event: LlmOutputEvent): void {
-    const callId = this.openModelCallByRun.get(event.runId);
-    const span = callId !== undefined ? this.modelCallSpans.peek(callId) : undefined;
-    if (!span) return;
+    const span = this.llmCallSpans.take(event.runId);
+    if (!span) return; // no open llm.call span for this run -- drop, don't fabricate
     if (event.usage) {
       if (event.usage.input !== undefined) span.setAttribute("gen_ai.usage.input_tokens", event.usage.input);
       if (event.usage.output !== undefined) span.setAttribute("gen_ai.usage.output_tokens", event.usage.output);
@@ -306,6 +324,8 @@ export class SpanMapper {
     if (this.config.captureContent) {
       span.setAttribute("gen_ai.output.messages", JSON.stringify(event.assistantTexts));
     }
+    span.setStatus({ code: SpanStatusCode.OK });
+    span.end();
   }
 
   onBeforeToolCall(event: BeforeToolCallEvent, ctx: ToolContext): void {

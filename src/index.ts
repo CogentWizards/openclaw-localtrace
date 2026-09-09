@@ -32,6 +32,19 @@ import type {
 } from "./spans.js";
 import type { ReplyPayloadSendingEvent } from "./metrics.js";
 
+// Module-level, not created fresh inside register(): confirmed via live
+// testing against a real Gateway that register(api) can be invoked more
+// than once for this plugin within the same process (the exact trigger
+// wasn't isolated, but the symptom was unambiguous -- see the commit this
+// comment shipped in). A per-call `handle` left whichever registration's
+// hooks were actually live pointing at a `handle` object nobody's service
+// had populated: every hook fired correctly, but `handle.current` was
+// always undefined, so no span or metric was ever written. A module-level
+// singleton guarantees every register() call, and every hook closure it
+// creates, shares the one handle whichever service instance actually
+// starts writes into.
+const handle = createRuntimeHandle();
+
 function guarded(api: OpenClawPluginApi, label: string, fn: () => void): void {
   try {
     fn();
@@ -46,7 +59,6 @@ export default definePluginEntry({
   description:
     "Full-fidelity OpenTelemetry capture for OpenClaw, written to your local filesystem only.",
   register(api) {
-    const handle = createRuntimeHandle();
     api.registerService(createLocaltraceService(handle));
 
     api.on("before_agent_run", (event: BeforeAgentRunEvent, ctx: AgentContext) => {
