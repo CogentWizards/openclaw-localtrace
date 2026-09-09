@@ -34,13 +34,21 @@ two make different, deliberate tradeoffs. You can run both at once.
 
 ## What it captures
 
-| OpenClaw internal event | Written as | Notes |
+This plugin is built entirely on OpenClaw's typed **plugin hooks**
+(`api.on(...)`), not the internal diagnostics bus `@openclaw/diagnostics-otel`
+uses — that bus turned out to be gated behind a hardcoded check against
+two literal service ids, unreachable by any third-party plugin regardless
+of install method. Hooks are a real, documented, third-party-accessible
+extension point instead: conversation-scoped hooks are unlocked per-plugin
+by the plugin's own operator, in their own config — see Setup below.
+
+| Hook(s) | Written as | Notes |
 |---|---|---|
-| `harness.run.*` | span `openclaw-localtrace.harness.run` | |
-| `run.*` | span `openclaw-localtrace.run` | |
-| `model.call.*` | span `openclaw-localtrace.model.call` | content gated by `captureContent` |
-| `tool.execution.*` | span `openclaw-localtrace.tool.execution` | includes `openclaw.mutatingAction` — a real write/mutation signal, always unknown from the official exporter's output |
-| `model.usage` | metric `openclaw.cost.usd` | cumulative, per (channel, provider, model) |
+| `before_agent_run` / `agent_end` | span `openclaw-localtrace.run` | requires `hooks.allowConversationAccess` |
+| `model_call_started` / `model_call_ended` | span `openclaw-localtrace.model.call` | **no permission opt-in needed** — sanitized, no content |
+| `llm_input` / `llm_output` | enriches the open `model.call` span with prompt/response content and token usage | content gated by `captureContent`; requires `hooks.allowConversationAccess`; token usage always attaches once the hook fires |
+| `before_tool_call` / `after_tool_call` | span `openclaw-localtrace.tool.execution` | **no permission opt-in needed**; includes `openclaw.mutatingAction`, a best-effort write/mutation classification from a configurable tool-name list (see `mutatingToolNames`) — there is no host-computed equivalent on this hook, unlike the old diagnostics-bus event |
+| `reply_payload_sending` | metric `openclaw.turn.cost.usd` | **no permission opt-in needed**; one gauge point per turn, from `usageState.turnUsd` — still an estimate from a configured cost table, not a certified per-call billed amount |
 
 Everything else is out of scope for v1 — this plugin exists to feed
 tools like [`redundo`](https://github.com/CogentWizards/redundo), not to
@@ -58,6 +66,17 @@ openclaw plugins install <path-or-npm-spec>
 openclaw plugins enable openclaw-localtrace
 openclaw config set plugins.entries.openclaw-localtrace.config.enabled true
 ```
+
+Grant this plugin access to conversation-scoped hooks (`before_agent_run`,
+`agent_end`, `llm_input`, `llm_output`) — without this, only
+`model.call`/`tool.execution` spans and turn-cost metrics are produced
+(all three of those need no permission at all):
+
+```bash
+openclaw config set plugins.entries.openclaw-localtrace.hooks.allowConversationAccess true
+```
+
+Note this key lives under `hooks`, a sibling of `config` — not inside it.
 
 Both of these are real, deliberate opt-ins — read before enabling:
 
@@ -80,6 +99,12 @@ Optional:
 openclaw config set plugins.entries.openclaw-localtrace.config.outputDir "/path/you/choose"
 openclaw config set plugins.entries.openclaw-localtrace.config.maxOutputBytes 524288000  # 500 MiB default
 openclaw config set plugins.entries.openclaw-localtrace.config.maxAgeDays 14             # default
+
+# Tool names classified as a write/mutation on the openclaw.mutatingAction
+# span attribute. Defaults to a conservative built-in list (exec,
+# apply_patch, write_file, edit_file, delete_file) -- override if your
+# deployment adds custom tools with side effects.
+openclaw config set plugins.entries.openclaw-localtrace.config.mutatingToolNames '["exec","apply_patch","my_custom_tool"]'
 ```
 
 Restart the Gateway after changing config.

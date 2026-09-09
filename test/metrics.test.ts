@@ -1,67 +1,62 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resolveConfig } from "../src/config.js";
-import { UsageMetricMapper } from "../src/metrics.js";
+import { TurnCostMapper, type ReplyPayloadSendingEvent } from "../src/metrics.js";
 
-type UsageEvent = Extract<DiagnosticEventPayload, { type: "model.usage" }>;
-
-function usageEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
+function replyEvent(overrides: Partial<ReplyPayloadSendingEvent> = {}): ReplyPayloadSendingEvent {
   return {
-    type: "model.usage",
-    ts: 1000,
-    seq: 1,
-    channel: "webchat",
-    provider: "anthropic",
-    model: "claude-sonnet-5",
-    usage: { total: 100 },
-    costUsd: 0.5,
+    sessionKey: "sess-1",
+    usageState: {
+      resolvedRef: "anthropic/claude-sonnet-5",
+      sessionId: "s1",
+      turnUsd: 0.5,
+      usage: { input: 100, output: 50 },
+    },
     ...overrides,
-  } as UsageEvent;
+  };
 }
 
-test("UsageMetricMapper: event with no costUsd produces no metric", () => {
-  const mapper = new UsageMetricMapper(resolveConfig(undefined, "/tmp/unused"));
-  const metric = mapper.toMetric(usageEvent({ costUsd: undefined }));
+test("TurnCostMapper: event with no usageState.turnUsd produces no metric", () => {
+  const mapper = new TurnCostMapper(resolveConfig(undefined, "/tmp/unused"));
+  const metric = mapper.toMetric(replyEvent({ usageState: { resolvedRef: "p/m" } }));
   assert.equal(metric, undefined);
 });
 
-test("UsageMetricMapper: a single event produces one data point with matching start and observed time", () => {
-  const mapper = new UsageMetricMapper(resolveConfig(undefined, "/tmp/unused"));
-  const metric = mapper.toMetric(usageEvent({ ts: 5000, costUsd: 1.23 }));
+test("TurnCostMapper: event with no usageState at all produces no metric", () => {
+  const mapper = new TurnCostMapper(resolveConfig(undefined, "/tmp/unused"));
+  const metric = mapper.toMetric(replyEvent({ usageState: undefined }));
+  assert.equal(metric, undefined);
+});
+
+test("TurnCostMapper: a turn with cost produces one gauge data point", () => {
+  const mapper = new TurnCostMapper(resolveConfig(undefined, "/tmp/unused"));
+  const metric = mapper.toMetric(replyEvent({ usageState: { turnUsd: 1.23 } }), 5000);
   assert.ok(metric);
-  assert.equal(metric.name, "openclaw.cost.usd");
-  const point = metric.sum.dataPoints[0];
+  assert.equal(metric.name, "openclaw.turn.cost.usd");
+  const point = metric.gauge.dataPoints[0];
   assert.equal(point.startTimeUnixNano, "5000000000");
   assert.equal(point.timeUnixNano, "5000000000");
   assert.equal(point.asDouble, 1.23);
 });
 
-test("UsageMetricMapper: startTimeUnixNano stays fixed at first-seen for the same series across later events", () => {
-  const mapper = new UsageMetricMapper(resolveConfig(undefined, "/tmp/unused"));
-  const first = mapper.toMetric(usageEvent({ ts: 1000, costUsd: 0.1 }))!;
-  const second = mapper.toMetric(usageEvent({ ts: 9000, costUsd: 0.4 }))!;
-  assert.equal(first.sum.dataPoints[0].startTimeUnixNano, "1000000000");
-  assert.equal(second.sum.dataPoints[0].startTimeUnixNano, "1000000000"); // unchanged
-  assert.equal(second.sum.dataPoints[0].timeUnixNano, "9000000000"); // advances
-});
-
-test("UsageMetricMapper: different (channel, provider, model) combinations are independent series", () => {
-  const mapper = new UsageMetricMapper(resolveConfig(undefined, "/tmp/unused"));
-  const webchat = mapper.toMetric(usageEvent({ ts: 1000, channel: "webchat", costUsd: 0.1 }))!;
-  const cron = mapper.toMetric(usageEvent({ ts: 5000, channel: "cron", costUsd: 0.2 }))!;
-  assert.equal(webchat.sum.dataPoints[0].startTimeUnixNano, "1000000000");
-  assert.equal(cron.sum.dataPoints[0].startTimeUnixNano, "5000000000"); // its own first-seen, not webchat's
-});
-
-test("UsageMetricMapper: sessionId is omitted unless captureIdentifiers is on", () => {
-  const off = new UsageMetricMapper(resolveConfig({ captureIdentifiers: false }, "/tmp/unused"));
-  const offMetric = off.toMetric(usageEvent({ sessionId: "s1" }))!;
-  const offAttrs = offMetric.sum.dataPoints[0].attributes.map((a) => a.key);
+test("TurnCostMapper: sessionId/sessionKey are omitted unless captureIdentifiers is on", () => {
+  const off = new TurnCostMapper(resolveConfig({ captureIdentifiers: false }, "/tmp/unused"));
+  const offMetric = off.toMetric(replyEvent())!;
+  const offAttrs = offMetric.gauge.dataPoints[0].attributes.map((a) => a.key);
   assert.ok(!offAttrs.includes("openclaw.sessionId"));
+  assert.ok(!offAttrs.includes("openclaw.sessionKey"));
 
-  const on = new UsageMetricMapper(resolveConfig({ captureIdentifiers: true }, "/tmp/unused"));
-  const onMetric = on.toMetric(usageEvent({ sessionId: "s1" }))!;
-  const onAttr = onMetric.sum.dataPoints[0].attributes.find((a) => a.key === "openclaw.sessionId");
+  const on = new TurnCostMapper(resolveConfig({ captureIdentifiers: true }, "/tmp/unused"));
+  const onMetric = on.toMetric(replyEvent())!;
+  const onAttr = onMetric.gauge.dataPoints[0].attributes.find((a) => a.key === "openclaw.sessionId");
   assert.equal(onAttr?.value.stringValue, "s1");
+  const onSessionKeyAttr = onMetric.gauge.dataPoints[0].attributes.find((a) => a.key === "openclaw.sessionKey");
+  assert.equal(onSessionKeyAttr?.value.stringValue, "sess-1");
+});
+
+test("TurnCostMapper: resolvedRef is kept regardless of captureIdentifiers", () => {
+  const mapper = new TurnCostMapper(resolveConfig({ captureIdentifiers: false }, "/tmp/unused"));
+  const metric = mapper.toMetric(replyEvent())!;
+  const attr = metric.gauge.dataPoints[0].attributes.find((a) => a.key === "openclaw.resolvedRef");
+  assert.equal(attr?.value.stringValue, "anthropic/claude-sonnet-5");
 });

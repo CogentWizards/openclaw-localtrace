@@ -8,9 +8,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfig } from "./config.js";
 import { writeOtlpBatch } from "./file-writer.js";
-import { UsageMetricMapper } from "./metrics.js";
+import { TurnCostMapper } from "./metrics.js";
 import { attributesToOtlp, metricsDocument, type OtlpKeyValue } from "./otlp-json.js";
 import { sweepRetention } from "./retention.js";
+import type { RuntimeHandle } from "./runtime-handle.js";
 import { FileSpanExporter } from "./span-exporter.js";
 import { SpanMapper } from "./spans.js";
 
@@ -30,9 +31,16 @@ function buildResourceAttributes(): OtlpKeyValue[] {
   return attributesToOtlp(resource.attributes);
 }
 
-export function createLocaltraceService(): OpenClawPluginService {
+/**
+ * Owns the OTel provider/exporter and retention-sweep lifecycle, keyed
+ * to config.enabled and hot-reloadable the same way as before. Does NOT
+ * subscribe to anything itself -- event delivery now comes through
+ * hooks registered directly on the plugin api (see index.ts), which
+ * write into the shared `handle` this service populates on start() and
+ * clears on stop().
+ */
+export function createLocaltraceService(handle: RuntimeHandle): OpenClawPluginService {
   let provider: BasicTracerProvider | undefined;
-  let unsubscribe: (() => void) | undefined;
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
 
   return {
@@ -44,12 +52,6 @@ export function createLocaltraceService(): OpenClawPluginService {
       const config = resolveConfig(pluginConfig(ctx), defaultOutputDir);
       if (!config.enabled) return;
 
-      const subscribe = ctx.internalDiagnostics?.onEvent;
-      if (!subscribe) {
-        ctx.logger.error("openclaw-localtrace: internal diagnostics capability unavailable");
-        return;
-      }
-
       const resourceAttributes = buildResourceAttributes();
       const exporter = new FileSpanExporter(config.outputDir, resourceAttributes);
       provider = new BasicTracerProvider({
@@ -57,23 +59,11 @@ export function createLocaltraceService(): OpenClawPluginService {
         spanProcessors: [new BatchSpanProcessor(exporter)],
       });
 
-      const spanMapper = new SpanMapper(provider, config);
-      const usageMetricMapper = new UsageMetricMapper(config);
-
-      unsubscribe = subscribe((event, metadata, privateData) => {
-        if (event.type === "model.usage") {
-          const metric = usageMetricMapper.toMetric(event);
-          if (metric) {
-            writeOtlpBatch(config.outputDir, "metrics", metricsDocument([metric], resourceAttributes)).catch(
-              (error: unknown) => {
-                ctx.logger.warn(`openclaw-localtrace: failed to write metrics batch: ${String(error)}`);
-              },
-            );
-          }
-          return;
-        }
-        spanMapper.handle(event, metadata, privateData);
-      });
+      handle.current = {
+        outputDir: config.outputDir,
+        spanMapper: new SpanMapper(provider, config),
+        turnCostMapper: new TurnCostMapper(config),
+      };
 
       const runSweep = () => {
         sweepRetention(config.outputDir, config.maxAgeDays, config.maxOutputBytes)
@@ -94,8 +84,7 @@ export function createLocaltraceService(): OpenClawPluginService {
     },
 
     async stop() {
-      unsubscribe?.();
-      unsubscribe = undefined;
+      handle.current = undefined;
       if (sweepTimer) clearInterval(sweepTimer);
       sweepTimer = undefined;
       if (provider) {
@@ -104,4 +93,15 @@ export function createLocaltraceService(): OpenClawPluginService {
       }
     },
   };
+}
+
+/** Writes a metrics batch for one turn-cost data point; separate from the
+ * span pipeline since metrics don't flow through the BatchSpanProcessor. */
+export async function writeTurnCostMetric(
+  outputDir: string,
+  metric: ReturnType<TurnCostMapper["toMetric"]>,
+): Promise<void> {
+  if (!metric) return;
+  const resourceAttributes = buildResourceAttributes();
+  await writeOtlpBatch(outputDir, "metrics", metricsDocument([metric], resourceAttributes));
 }

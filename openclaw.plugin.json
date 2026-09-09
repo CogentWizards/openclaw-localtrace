@@ -37,6 +37,11 @@
         "type": "number",
         "default": 14,
         "description": "Delete output files older than this many days, checked on a periodic sweep."
+      },
+      "mutatingToolNames": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Tool names classified as a write/mutation for the openclaw.mutatingAction span attribute. Overrides the built-in default list (exec, apply_patch, write_file, edit_file, delete_file) -- extend or replace this for custom tools with side effects your deployment adds. See README."
       }
     }
   }
