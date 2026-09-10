@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadPricingResolver } from "../src/service.js";
+import { conversationAccessWarning, hasConversationAccess, loadPricingResolver } from "../src/service.js";
 
 function stubLogger() {
   const warnings: string[] = [];
@@ -59,4 +59,53 @@ test("loadPricingResolver: a malformed override file warns and falls back to the
   const cost = resolver("anthropic", "claude-sonnet-5", { input: 1000 });
   assert.ok(cost !== undefined); // still falls back to the bundled table, not a crash
   assert.equal(warnings.length, 1);
+});
+
+// --- hasConversationAccess / conversationAccessWarning: the two-config-surface trap ---
+
+test("hasConversationAccess: true only when explicitly set to true", () => {
+  assert.equal(hasConversationAccess({ allowConversationAccess: true }), true);
+  assert.equal(hasConversationAccess({ allowConversationAccess: false }), false);
+  assert.equal(hasConversationAccess({}), false);
+  assert.equal(hasConversationAccess(undefined), false);
+  // A truthy-but-not-boolean value must not accidentally grant access --
+  // this mirrors OpenClaw's own `=== true` check exactly, not `Boolean(x)`.
+  assert.equal(hasConversationAccess({ allowConversationAccess: "true" }), false);
+});
+
+test("conversationAccessWarning: no warning when access is granted, regardless of capture config", () => {
+  assert.equal(conversationAccessWarning(true, true, true), undefined);
+  assert.equal(conversationAccessWarning(false, false, true), undefined);
+});
+
+test("conversationAccessWarning: no warning when neither capture option is on -- not a misconfiguration", () => {
+  assert.equal(conversationAccessWarning(false, false, false), undefined);
+});
+
+test("conversationAccessWarning: warns when captureContent is on but access isn't granted", () => {
+  const warning = conversationAccessWarning(true, false, false);
+  assert.ok(warning);
+  assert.match(warning, /config\.captureContent/);
+  assert.match(warning, /hooks\.allowConversationAccess/);
+  assert.doesNotMatch(warning, /config\.captureContent and/); // singular phrasing for one option
+});
+
+test("conversationAccessWarning: warns when captureIdentifiers is on but access isn't granted", () => {
+  const warning = conversationAccessWarning(false, true, false);
+  assert.ok(warning);
+  assert.match(warning, /config\.captureIdentifiers/);
+});
+
+test("conversationAccessWarning: mentions both options by name when both are on", () => {
+  const warning = conversationAccessWarning(true, true, false);
+  assert.ok(warning);
+  assert.match(warning, /config\.captureContent and config\.captureIdentifiers are on/);
+});
+
+test("conversationAccessWarning: includes the exact fix command", () => {
+  const warning = conversationAccessWarning(true, false, false);
+  assert.match(
+    warning!,
+    /openclaw config set plugins\.entries\.openclaw-localtrace\.hooks\.allowConversationAccess true/,
+  );
 });

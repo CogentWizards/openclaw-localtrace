@@ -28,6 +28,61 @@ function pluginConfig(ctx: OpenClawPluginServiceContext): Record<string, unknown
   return ctx.config.plugins?.entries?.[PLUGIN_ID]?.config;
 }
 
+function pluginHooksConfig(ctx: OpenClawPluginServiceContext): Record<string, unknown> | undefined {
+  return ctx.config.plugins?.entries?.[PLUGIN_ID]?.hooks;
+}
+
+/** Faithful replay of OpenClaw's own resolveConversationAccessAllowed for
+ * a non-bundled plugin (this plugin is never "bundled", so the simpler
+ * branch always applies): true only when the operator has explicitly set
+ * hooks.allowConversationAccess to true. Confirmed directly from
+ * OpenClaw's compiled hook-policy-decisions.ts, not inferred -- see
+ * spans.ts's own module docstring for how that was found. */
+export function hasConversationAccess(hooksConfig: Record<string, unknown> | undefined): boolean {
+  return hooksConfig?.allowConversationAccess === true;
+}
+
+/**
+ * The two-config-surface trap: captureContent/captureIdentifiers live
+ * under plugins.entries.<id>.config, but the permission that actually
+ * unlocks the hooks those two options depend on
+ * (llm_input/llm_output/before_agent_run/agent_end) lives under a
+ * *different* top-level key, plugins.entries.<id>.hooks. Turning on the
+ * first without the second doesn't error -- it just silently produces a
+ * thinner capture than the operator asked for, discovered later (if at
+ * all) as unexpectedly low content/cost coverage in a redundo report.
+ * This is the one misconfiguration worth a loud, explicit startup
+ * warning rather than a quiet degradation: it's exactly the failure mode
+ * a real live-Gateway walkthrough of this plugin surfaced as the single
+ * most likely way to end up with a confusing result.
+ *
+ * Returns undefined when there's nothing to warn about -- either
+ * permission is already granted, or neither option is even on (a
+ * deliberately minimal-capture setup, not a misconfiguration).
+ */
+export function conversationAccessWarning(
+  captureContent: boolean,
+  captureIdentifiers: boolean,
+  granted: boolean,
+): string | undefined {
+  if (granted) return undefined;
+  if (!captureContent && !captureIdentifiers) return undefined;
+
+  const wants: string[] = [];
+  if (captureContent) wants.push("captureContent");
+  if (captureIdentifiers) wants.push("captureIdentifiers");
+
+  return (
+    `openclaw-localtrace: config.${wants.join(" and config.")} ${wants.length > 1 ? "are" : "is"} on, ` +
+    "but plugins.entries.openclaw-localtrace.hooks.allowConversationAccess is not set to true. " +
+    "llm.call spans -- prompt/response content, per-call gen_ai.usage.cost_usd estimates, and the " +
+    "run-level workflow label -- will be silently skipped for every turn as a result. Tool-call " +
+    "content, the write/mutation signal, and session/run identifiers on model.call/tool.execution " +
+    "spans are unaffected and will still work. Fix with: openclaw config set " +
+    "plugins.entries.openclaw-localtrace.hooks.allowConversationAccess true (then restart the Gateway)."
+  );
+}
+
 function buildResourceAttributes(): OtlpKeyValue[] {
   const resource = resourceFromAttributes({ [ATTR_SERVICE_NAME]: PLUGIN_ID });
   return attributesToOtlp(resource.attributes);
@@ -83,6 +138,13 @@ export function createLocaltraceService(handle: RuntimeHandle): OpenClawPluginSe
       const defaultOutputDir = path.join(ctx.stateDir, PLUGIN_ID);
       const config = resolveConfig(pluginConfig(ctx), defaultOutputDir);
       if (!config.enabled) return;
+
+      const warning = conversationAccessWarning(
+        config.captureContent,
+        config.captureIdentifiers,
+        hasConversationAccess(pluginHooksConfig(ctx)),
+      );
+      if (warning) ctx.logger.warn(warning);
 
       const resourceAttributes = buildResourceAttributes();
       const exporter = new FileSpanExporter(config.outputDir, resourceAttributes);
