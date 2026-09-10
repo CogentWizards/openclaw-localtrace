@@ -74,6 +74,7 @@
 import { ROOT_CONTEXT, SpanKind, SpanStatusCode, trace, type Attributes, type Span } from "@opentelemetry/api";
 import type { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { LocaltraceConfig } from "./config.js";
+import { estimateCostUsd } from "./pricing.js";
 import { pruneUndefined } from "./utils.js";
 
 const TRACER_NAME = "openclaw-localtrace";
@@ -153,6 +154,8 @@ export interface LlmInputEvent {
 
 export interface LlmOutputEvent {
   runId: string;
+  provider?: string;
+  model?: string;
   assistantTexts: string[];
   usage?: {
     input?: number;
@@ -320,6 +323,12 @@ export class SpanMapper {
       if (event.usage.output !== undefined) span.setAttribute("gen_ai.usage.output_tokens", event.usage.output);
       if (event.usage.cacheRead !== undefined) span.setAttribute("gen_ai.usage.cache_read.input_tokens", event.usage.cacheRead);
       if (event.usage.cacheWrite !== undefined) span.setAttribute("gen_ai.usage.cache_creation.input_tokens", event.usage.cacheWrite);
+      // Estimated, from a bundled static pricing snapshot -- see
+      // pricing.ts's own module docstring for why this isn't a live
+      // lookup. Not gated behind captureContent: like the token counts
+      // above, this is derived data, not raw prompt/response content.
+      const costUsd = estimateCostUsd(event.provider, event.model, event.usage);
+      if (costUsd !== undefined) span.setAttribute("gen_ai.usage.cost_usd", costUsd);
     }
     if (this.config.captureContent) {
       span.setAttribute("gen_ai.output.messages", JSON.stringify(event.assistantTexts));
