@@ -67,7 +67,35 @@ an unrecognized model simply gets no cost estimate, never a guessed one.
 Refresh it with `npm run update-pricing-table` (fetches a fresh copy of
 LiteLLM's data, the only network access anywhere in this repo's own
 tooling — the plugin itself still never does this at runtime), review
-the diff, and commit it.
+the diff, and commit it. That's the repo-checkout path, for the next
+published release.
+
+**If you only have the plugin installed** — no repo checkout, no dev
+tooling, most users once this is on npm — you don't have to wait for a
+new release every time a model is missing:
+
+```bash
+npx openclaw-localtrace-update-pricing
+```
+
+This is a real bin command shipped inside the published package. It
+fetches the same LiteLLM data and writes it to a fixed default location
+(`~/.openclaw/openclaw-localtrace/pricing-table.json`) that the plugin
+checks automatically on every Gateway start — no config change needed,
+just restart the Gateway afterward. Pass `--out <path>` for a different
+location, together with:
+
+```bash
+openclaw config set plugins.entries.openclaw-localtrace.config.pricingTableOverridePath "<path>"
+```
+
+An override entry wins per provider/model; anything it doesn't cover
+still falls back to the bundled snapshot, so a small or slightly-stale
+override never regresses coverage for everything else. A missing or
+malformed override file is handled gracefully (silently ignored if
+missing — that's the normal default state; logged as a warning and
+ignored if present but unparseable) — either way, this never blocks the
+plugin from starting.
 
 Everything else is out of scope for v1 — this plugin exists to feed
 tools like [`redundo`](https://github.com/CogentWizards/redundo), not to

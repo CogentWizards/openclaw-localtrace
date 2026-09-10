@@ -18,9 +18,24 @@
  * reseller-hosted variants) for six major providers: anthropic, openai,
  * gemini, vertex_ai-language-models, xai, deepseek, mistral. It WILL go
  * stale as new models ship -- an unrecognized model simply gets no
- * price (see `estimateCostUsd` below), never a guessed one. Regenerate
- * with `npm run update-pricing-table` (see scripts/update-pricing-table.mjs),
- * review the diff, and commit it like any other change.
+ * price (see `estimateCostUsd` below), never a guessed one.
+ *
+ * Two separate ways to refresh it, for two separate audiences:
+ * - A repo checkout can regenerate the bundled snapshot itself with
+ *   `npm run update-pricing-table` (scripts/update-pricing-table.mjs),
+ *   review the diff, and ship it in the next published version.
+ * - Anyone with only the published package installed -- most users, once
+ *   this is on npm -- doesn't have that dev script and can't wait for a
+ *   new release every time a model is missing. `bin/update-pricing.js`
+ *   (shipped in the package, runnable via
+ *   `npx openclaw-localtrace-update-pricing`) fetches the same data and
+ *   writes it to a fixed override path (`defaultOverridePath` below,
+ *   or `--out <path>` + the plugin's own `pricingTableOverridePath`
+ *   config) that this module checks at runtime and layers OVER the
+ *   bundled table (override wins per provider/model, bundled still
+ *   covers everything the override doesn't) -- no new release needed,
+ *   and still no network access from the plugin itself, only from that
+ *   one, explicitly-run command.
  *
  * OpenClaw's own cost-estimation machinery (`estimateAggregateUsageCost`/
  * `resolveModelCostConfig` in its compiled source) additionally layers in
@@ -29,9 +44,11 @@
  * provider-published-rate estimate, nothing more.
  */
 
+import os from "node:os";
+import path from "node:path";
 import pricingTableJson from "./pricing-table.json" with { type: "json" };
 
-interface PricingEntry {
+export interface PricingEntry {
   provider: string;
   input: number;
   output: number;
@@ -39,30 +56,20 @@ interface PricingEntry {
   cacheWrite: number | null;
 }
 
-const pricingTable = pricingTableJson as Record<string, PricingEntry>;
+export type PricingTable = Record<string, PricingEntry>;
 
-// LiteLLM's own key convention is inconsistent by provider: anthropic/
-// openai/deepseek/mistral entries are bare model names ("claude-sonnet-5"),
-// while gemini/xai entries keep a "provider/" prefix even for direct API
-// access ("gemini/gemini-2.5-flash"). Normalizing to (provider, bareModel)
-// once at load time means callers never have to know which convention a
-// given provider happens to use.
-interface NormalizedEntry {
-  bareModel: string;
-  pricing: PricingEntry;
-}
+const bundledPricingTable = pricingTableJson as PricingTable;
 
-const byProviderAndModel = new Map<string, Map<string, PricingEntry>>();
-for (const [key, entry] of Object.entries(pricingTable)) {
-  const slashIndex = key.indexOf("/");
-  const bareModel = slashIndex >= 0 ? key.slice(slashIndex + 1) : key;
-  let byModel = byProviderAndModel.get(entry.provider);
-  if (!byModel) {
-    byModel = new Map();
-    byProviderAndModel.set(entry.provider, byModel);
-  }
-  byModel.set(bareModel, entry);
-}
+/** Fixed default location an override file is read from (if present) and
+ * the CLI writes to (unless given `--out`) -- a plain, predictable path
+ * this module owns end-to-end, not a guess at any other component's
+ * internal directory conventions. */
+export const defaultOverridePath = path.join(
+  os.homedir(),
+  ".openclaw",
+  "openclaw-localtrace",
+  "pricing-table.json",
+);
 
 // OpenClaw's own provider id for a given service doesn't always match
 // LiteLLM's `litellm_provider` slug exactly (e.g. OpenClaw may call
@@ -75,12 +82,28 @@ const PROVIDER_ALIASES: Record<string, string> = {
   vertexai: "vertex_ai-language-models",
 };
 
-function resolveEntry(provider: string, model: string): PricingEntry | undefined {
-  const providerKey = PROVIDER_ALIASES[provider] ?? provider;
-  const byModel = byProviderAndModel.get(providerKey);
-  if (!byModel) return undefined;
-  return byModel.get(model);
+// LiteLLM's own key convention is inconsistent by provider: anthropic/
+// openai/deepseek/mistral entries are bare model names ("claude-sonnet-5"),
+// while gemini/xai entries keep a "provider/" prefix even for direct API
+// access ("gemini/gemini-2.5-flash"). Normalizing to (provider, bareModel)
+// once at load time means callers never have to know which convention a
+// given provider happens to use.
+function buildPricingIndex(table: PricingTable): Map<string, Map<string, PricingEntry>> {
+  const byProviderAndModel = new Map<string, Map<string, PricingEntry>>();
+  for (const [key, entry] of Object.entries(table)) {
+    const slashIndex = key.indexOf("/");
+    const bareModel = slashIndex >= 0 ? key.slice(slashIndex + 1) : key;
+    let byModel = byProviderAndModel.get(entry.provider);
+    if (!byModel) {
+      byModel = new Map();
+      byProviderAndModel.set(entry.provider, byModel);
+    }
+    byModel.set(bareModel, entry);
+  }
+  return byProviderAndModel;
 }
+
+const bundledIndex = buildPricingIndex(bundledPricingTable);
 
 export interface UsageForCost {
   input?: number;
@@ -89,18 +112,13 @@ export interface UsageForCost {
   cacheWrite?: number;
 }
 
-/** Estimated USD cost for one call's token usage, from the bundled
- * pricing snapshot -- undefined (never a guessed number) when the
- * provider/model isn't in the table, or usage carries no tokens at all. */
-export function estimateCostUsd(
+export type PricingResolver = (
   provider: string | undefined,
   model: string | undefined,
   usage: UsageForCost | undefined,
-): number | undefined {
-  if (!provider || !model || !usage) return undefined;
-  const entry = resolveEntry(provider, model);
-  if (!entry) return undefined;
+) => number | undefined;
 
+function costFromEntry(entry: PricingEntry, usage: UsageForCost): number | undefined {
   let total = 0;
   let hasAnyTokens = false;
   if (usage.input !== undefined) {
@@ -119,6 +137,33 @@ export function estimateCostUsd(
     total += usage.cacheWrite * entry.cacheWrite;
     hasAnyTokens = true;
   }
-  if (!hasAnyTokens) return undefined;
-  return total;
+  return hasAnyTokens ? total : undefined;
 }
+
+/** Builds a resolver that checks `overrideTable` first (if given) and
+ * falls back to the bundled snapshot -- an override entry for a
+ * provider/model wins outright; anything the override doesn't cover
+ * still resolves from the bundled table, so a small, partial override
+ * (or one that's gone slightly stale itself) never regresses coverage
+ * for everything else. */
+export function createPricingResolver(overrideTable?: PricingTable): PricingResolver {
+  const overrideIndex = overrideTable ? buildPricingIndex(overrideTable) : undefined;
+
+  function lookup(index: Map<string, Map<string, PricingEntry>>, provider: string, model: string) {
+    const providerKey = PROVIDER_ALIASES[provider] ?? provider;
+    return index.get(providerKey)?.get(model);
+  }
+
+  return (provider, model, usage) => {
+    if (!provider || !model || !usage) return undefined;
+    const entry =
+      (overrideIndex && lookup(overrideIndex, provider, model)) ??
+      lookup(bundledIndex, provider, model);
+    if (!entry) return undefined;
+    return costFromEntry(entry, usage);
+  };
+}
+
+/** The bundled-only resolver -- used whenever no override was loaded
+ * (the default; see service.ts for how/when an override is read). */
+export const estimateCostUsd: PricingResolver = createPricingResolver();

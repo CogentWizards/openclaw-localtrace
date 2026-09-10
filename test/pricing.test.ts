@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { estimateCostUsd } from "../src/pricing.js";
+import { createPricingResolver, estimateCostUsd, type PricingTable } from "../src/pricing.js";
 
 test("estimateCostUsd: a known bare-key model (anthropic) computes input+output cost", () => {
   const cost = estimateCostUsd("anthropic", "claude-sonnet-5", { input: 1_000_000, output: 1_000_000 });
@@ -44,6 +44,34 @@ test("estimateCostUsd: cache tokens contribute when the model has cache pricing"
   const withoutCache = estimateCostUsd("anthropic", "claude-sonnet-5", { input: 1000 })!;
   const withCache = estimateCostUsd("anthropic", "claude-sonnet-5", { input: 1000, cacheRead: 1000 })!;
   assert.ok(withCache > withoutCache);
+});
+
+// --- createPricingResolver: the override mechanism ---------------------
+
+test("createPricingResolver: an override entry wins over the bundled price for the same provider/model", () => {
+  const overrideTable: PricingTable = {
+    "claude-sonnet-5": { provider: "anthropic", input: 1, output: 1, cacheRead: null, cacheWrite: null },
+  };
+  const resolver = createPricingResolver(overrideTable);
+  const cost = resolver("anthropic", "claude-sonnet-5", { input: 10 });
+  assert.equal(cost, 10); // 10 tokens * $1/token from the override, not the bundled rate
+});
+
+test("createPricingResolver: a model the override doesn't cover still resolves from the bundled table", () => {
+  const overrideTable: PricingTable = {
+    "some-other-model": { provider: "anthropic", input: 1, output: 1, cacheRead: null, cacheWrite: null },
+  };
+  const resolver = createPricingResolver(overrideTable);
+  const cost = resolver("anthropic", "claude-sonnet-5", { input: 1_000_000 });
+  assert.ok(cost !== undefined); // falls through to the bundled entry
+  assert.notEqual(cost, 1_000_000); // not the override's $1/token rate
+});
+
+test("createPricingResolver: an empty override behaves identically to the bundled-only resolver", () => {
+  const resolver = createPricingResolver({});
+  const cost = resolver("anthropic", "claude-sonnet-5", { input: 1000, output: 500 });
+  const bundledCost = estimateCostUsd("anthropic", "claude-sonnet-5", { input: 1000, output: 500 });
+  assert.equal(cost, bundledCost);
 });
 
 test("estimateCostUsd: a real captured value is at least the right order of magnitude", () => {
