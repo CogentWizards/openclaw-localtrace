@@ -104,19 +104,26 @@ async function main() {
   const sorted = {};
   for (const key of sortedKeys) sorted[key] = curated[key];
 
+  // generatedAt is load-bearing, not decorative -- see pricing.ts's own
+  // module docstring on why a stale-but-present price is a worse failure
+  // than a missing one, and how this timestamp is what makes that
+  // staleness visible (a startup warning past 30 days, and a per-span
+  // attribute in every capture) instead of silent.
+  const file = { generatedAt: new Date().toISOString(), entries: sorted };
+
   const outPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
     "..",
     "src",
     "pricing-table.json",
   );
-  await writeFile(outPath, JSON.stringify(sorted, null, 2) + "\n", "utf-8");
+  await writeFile(outPath, JSON.stringify(file, null, 2) + "\n", "utf-8");
 
   const byProvider = {};
   for (const entry of Object.values(sorted)) {
     byProvider[entry.provider] = (byProvider[entry.provider] ?? 0) + 1;
   }
-  console.log(`Wrote ${sortedKeys.length} entries to ${outPath}`);
+  console.log(`Wrote ${sortedKeys.length} entries to ${outPath} (generatedAt: ${file.generatedAt})`);
   console.log("By provider:", byProvider);
   console.log("Review the diff (git diff src/pricing-table.json) before committing.");
 }

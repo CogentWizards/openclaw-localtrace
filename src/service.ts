@@ -11,7 +11,14 @@ import { resolveConfig } from "./config.js";
 import { writeOtlpBatch } from "./file-writer.js";
 import { TurnCostMapper } from "./metrics.js";
 import { attributesToOtlp, metricsDocument, type OtlpKeyValue } from "./otlp-json.js";
-import { createPricingResolver, type PricingResolver, type PricingTable } from "./pricing.js";
+import {
+  createPricingContext,
+  defaultPricingContext,
+  pricingAgeDays,
+  STALENESS_WARNING_DAYS,
+  type PricingContext,
+  type PricingTableFile,
+} from "./pricing.js";
 import { sweepRetention } from "./retention.js";
 import type { RuntimeHandle } from "./runtime-handle.js";
 import { FileSpanExporter } from "./span-exporter.js";
@@ -96,26 +103,53 @@ function buildResourceAttributes(): OtlpKeyValue[] {
  * or the update command was never run) and produces no log at all;
  * only a file that exists but fails to parse is worth a warning -- that
  * is a real misconfiguration, not an absence. */
-export async function loadPricingResolver(
+export async function loadPricingContext(
   overridePath: string,
   logger: OpenClawPluginServiceContext["logger"],
-): Promise<PricingResolver> {
+): Promise<PricingContext> {
   let raw: string;
   try {
     raw = await readFile(overridePath, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return createPricingResolver();
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaultPricingContext;
     logger.warn(`openclaw-localtrace: could not read pricing override at ${overridePath}: ${String(error)}`);
-    return createPricingResolver();
+    return defaultPricingContext;
   }
   try {
-    const overrideTable = JSON.parse(raw) as PricingTable;
-    logger.info(`openclaw-localtrace: loaded a pricing override from ${overridePath}`);
-    return createPricingResolver(overrideTable);
+    const overrideFile = JSON.parse(raw) as PricingTableFile;
+    logger.info(`openclaw-localtrace: loaded a pricing override from ${overridePath} (generatedAt: ${overrideFile.generatedAt})`);
+    return createPricingContext(overrideFile);
   } catch (error) {
     logger.warn(`openclaw-localtrace: pricing override at ${overridePath} is not valid JSON, ignoring it: ${String(error)}`);
-    return createPricingResolver();
+    return defaultPricingContext;
   }
+}
+
+/**
+ * Warn at startup when this plugin's OWN pricing data -- the file the
+ * bundled/fetched snapshot described in pricing.ts's module docstring,
+ * entirely distinct from OpenClaw's own internal pricing catalog -- is
+ * older than STALENESS_WARNING_DAYS. A missing model is visible (no
+ * cost_usd at all); a stale-but-present price is not: it produces a
+ * confident, plausible-looking dollar figure indistinguishable from a
+ * correct one. This is the one signal that makes that risk visible
+ * instead of silent, alongside the per-span openclaw.pricingTableGeneratedAt
+ * attribute every priced record already carries (see spans.ts) -- so
+ * the age is visible both at startup and in every redundo report, not
+ * just one or the other.
+ */
+export function pricingStalenessWarning(
+  generatedAt: string,
+  now: number = Date.now(),
+): string | undefined {
+  const ageDays = pricingAgeDays(generatedAt, now);
+  if (ageDays <= STALENESS_WARNING_DAYS) return undefined;
+  return (
+    `openclaw-localtrace: this plugin's own pricing data (NOT OpenClaw's built-in pricing) is ` +
+    `${ageDays} day(s) old (generated ${generatedAt}) -- provider rates may have changed since ` +
+    "then, and gen_ai.usage.cost_usd estimates could be off as a result. Refresh with: npx " +
+    "openclaw-localtrace-update-pricing (then restart the Gateway)."
+  );
 }
 
 /**
@@ -153,11 +187,13 @@ export function createLocaltraceService(handle: RuntimeHandle): OpenClawPluginSe
         spanProcessors: [new BatchSpanProcessor(exporter)],
       });
 
-      const pricingResolver = await loadPricingResolver(config.pricingTableOverridePath, ctx.logger);
+      const pricingContext = await loadPricingContext(config.pricingTableOverridePath, ctx.logger);
+      const stalenessWarning = pricingStalenessWarning(pricingContext.generatedAt);
+      if (stalenessWarning) ctx.logger.warn(stalenessWarning);
 
       handle.current = {
         outputDir: config.outputDir,
-        spanMapper: new SpanMapper(provider, config, pricingResolver),
+        spanMapper: new SpanMapper(provider, config, pricingContext),
         turnCostMapper: new TurnCostMapper(config),
       };
 

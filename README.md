@@ -97,6 +97,33 @@ missing — that's the normal default state; logged as a warning and
 ignored if present but unparseable) — either way, this never blocks the
 plugin from starting.
 
+### This plugin's own price list, not OpenClaw's
+
+To be explicit about what's being tracked here: `gen_ai.usage.cost_usd`
+is computed from **this plugin's own** bundled/fetched pricing snapshot
+above — a completely separate, unrelated dataset from whatever pricing
+catalog OpenClaw itself uses internally for its own cost estimates
+elsewhere (its usage bar, `models` commands, etc.). We looked into
+reading OpenClaw's own resolved catalog directly instead of maintaining
+a second one, and confirmed there's no way to: its actual computation
+lives in an internal, content-hashed module with no stable import path,
+the public plugin-sdk surface only exposes helpers for *submitting*
+pricing (not reading OpenClaw's resolved one), nothing is cached to
+disk, and neither `openclaw models list --json` nor `openclaw models
+status --json` includes a single price field. This plugin's table is
+the only option, not a fallback.
+
+**A stale-but-present price is worse than a missing one** — a missing
+model visibly produces no `cost_usd` at all; a provider quietly changing
+a rate produces a confident, plausible-looking dollar figure that looks
+exactly like a correct one. So every `gen_ai.usage.cost_usd` estimate
+also carries `openclaw.pricingTableGeneratedAt` (an ISO timestamp) on
+the same span, always — not just when it's old — so its age is visible
+in every capture, not something you have to remember to check.
+Additionally, the Gateway logs a warning at startup once this plugin's
+pricing data (bundled or override, whichever is active) is more than 30
+days old, naming the exact refresh command above.
+
 Everything else is out of scope for v1 — this plugin exists to feed
 tools like [`redundo`](https://github.com/CogentWizards/redundo), not to
 be a general Gateway-observability exporter.

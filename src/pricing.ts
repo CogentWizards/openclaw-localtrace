@@ -11,6 +11,21 @@
  * departure from "no network path exists," so it stays out of scope
  * here in favor of a table that goes stale instead.
  *
+ * Checked directly (not assumed) whether OpenClaw's own resolved,
+ * internal pricing catalog is reachable instead of maintaining a
+ * separate one: it isn't. Its actual computation
+ * (`estimateAggregateUsageCost`/`resolveModelCostConfig`) lives in a
+ * purely internal, content-hashed chunk with no stable import path; the
+ * public `plugin-sdk/model-catalog-pricing` subpath only exports
+ * normalization helpers for a plugin *submitting* its own pricing, not a
+ * way to *read* the resolved one; there is no on-disk cache (the full
+ * SQLite schema and the `~/.openclaw` tree were both checked); and
+ * neither `openclaw models list --json` nor `openclaw models status
+ * --json` includes a single price field. This plugin's own bundled/
+ * fetched table -- distinct from, and unrelated to, OpenClaw's own
+ * internal one -- is genuinely the only option, not a fallback settled
+ * for.
+ *
  * `pricing-table.json` is a curated subset of LiteLLM's own public
  * `model_prices_and_context_window.json`
  * (https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json),
@@ -20,33 +35,45 @@
  * stale as new models ship -- an unrecognized model simply gets no
  * price (see `estimateCostUsd` below), never a guessed one.
  *
+ * Staleness of a *recognized* model's price is a different, worse
+ * problem: unlike a missing model (which visibly produces no estimate
+ * at all), a provider quietly changing a rate produces a confidently
+ * wrong number that looks exactly like a correct one. Every pricing
+ * file this module reads or writes therefore carries its own
+ * `generatedAt` timestamp (see `PricingTableFile`), and both this
+ * plugin's own currently-active table's age (surfaced via
+ * `activePricingContext().generatedAt` -> a span attribute -- see
+ * spans.ts) and a Gateway-startup warning past 30 days old (see
+ * service.ts's `pricingStalenessWarning`) make that age visible rather
+ * than silent. This is specifically *this plugin's own* pricing data --
+ * unrelated to, and not to be confused with, whatever pricing catalog
+ * OpenClaw itself uses internally (see above).
+ *
  * Two separate ways to refresh it, for two separate audiences:
  * - A repo checkout can regenerate the bundled snapshot itself with
  *   `npm run update-pricing-table` (scripts/update-pricing-table.mjs),
  *   review the diff, and ship it in the next published version.
  * - Anyone with only the published package installed -- most users, once
  *   this is on npm -- doesn't have that dev script and can't wait for a
- *   new release every time a model is missing. `bin/update-pricing.js`
- *   (shipped in the package, runnable via
- *   `npx openclaw-localtrace-update-pricing`) fetches the same data and
- *   writes it to a fixed override path (`defaultOverridePath` below,
- *   or `--out <path>` + the plugin's own `pricingTableOverridePath`
- *   config) that this module checks at runtime and layers OVER the
- *   bundled table (override wins per provider/model, bundled still
- *   covers everything the override doesn't) -- no new release needed,
- *   and still no network access from the plugin itself, only from that
- *   one, explicitly-run command.
+ *   new release every time a model is missing or a price has drifted.
+ *   `npx openclaw-localtrace-update-pricing` (shipped in the package)
+ *   fetches the same data and writes it to a fixed override path
+ *   (`defaultOverridePath` below, or `--out <path>` + the plugin's own
+ *   `pricingTableOverridePath` config) that this module checks at
+ *   runtime and layers OVER the bundled table (override wins per
+ *   provider/model, bundled still covers everything the override
+ *   doesn't) -- no new release needed, and still no network access from
+ *   the plugin itself, only from that one, explicitly-run command.
  *
- * OpenClaw's own cost-estimation machinery (`estimateAggregateUsageCost`/
- * `resolveModelCostConfig` in its compiled source) additionally layers in
- * the operator's own `models.json` overrides and per-provider config --
- * this table does not attempt to replicate that; it is a plain,
+ * OpenClaw's own cost-estimation machinery additionally layers in the
+ * operator's own `models.json` overrides and per-provider config -- this
+ * table does not attempt to replicate that; it is a plain,
  * provider-published-rate estimate, nothing more.
  */
 
 import os from "node:os";
 import path from "node:path";
-import pricingTableJson from "./pricing-table.json" with { type: "json" };
+import pricingTableFileJson from "./pricing-table.json" with { type: "json" };
 
 export interface PricingEntry {
   provider: string;
@@ -58,7 +85,16 @@ export interface PricingEntry {
 
 export type PricingTable = Record<string, PricingEntry>;
 
-const bundledPricingTable = pricingTableJson as PricingTable;
+/** On-disk shape for both the bundled snapshot and any override file --
+ * generatedAt is load-bearing (see module docstring on staleness), not
+ * decorative, so both writers (scripts/update-pricing-table.mjs,
+ * update-pricing-cli.ts) and this module's own readers agree on it. */
+export interface PricingTableFile {
+  generatedAt: string; // ISO 8601, UTC
+  entries: PricingTable;
+}
+
+const bundledPricingTableFile = pricingTableFileJson as PricingTableFile;
 
 /** Fixed default location an override file is read from (if present) and
  * the CLI writes to (unless given `--out`) -- a plain, predictable path
@@ -70,6 +106,13 @@ export const defaultOverridePath = path.join(
   "openclaw-localtrace",
   "pricing-table.json",
 );
+
+/** Warn once at Gateway startup when the *active* pricing table (the
+ * override if one was loaded, else the bundled snapshot) is older than
+ * this -- see service.ts's pricingStalenessWarning. A provider changing
+ * a rate is a real, if infrequent, event; 30 days balances catching it
+ * against warning on every single startup. */
+export const STALENESS_WARNING_DAYS = 30;
 
 // OpenClaw's own provider id for a given service doesn't always match
 // LiteLLM's `litellm_provider` slug exactly (e.g. OpenClaw may call
@@ -103,7 +146,7 @@ function buildPricingIndex(table: PricingTable): Map<string, Map<string, Pricing
   return byProviderAndModel;
 }
 
-const bundledIndex = buildPricingIndex(bundledPricingTable);
+const bundledIndex = buildPricingIndex(bundledPricingTableFile.entries);
 
 export interface UsageForCost {
   input?: number;
@@ -167,3 +210,32 @@ export function createPricingResolver(overrideTable?: PricingTable): PricingReso
 /** The bundled-only resolver -- used whenever no override was loaded
  * (the default; see service.ts for how/when an override is read). */
 export const estimateCostUsd: PricingResolver = createPricingResolver();
+
+/** A resolver bundled together with the generatedAt timestamp of
+ * whichever table is actually backing it -- so a consumer (SpanMapper)
+ * can attach both the cost estimate AND its own age to the same span in
+ * one place, instead of tracking the timestamp separately by hand. */
+export interface PricingContext {
+  estimateCostUsd: PricingResolver;
+  generatedAt: string;
+}
+
+export function createPricingContext(override?: PricingTableFile): PricingContext {
+  return {
+    estimateCostUsd: createPricingResolver(override?.entries),
+    generatedAt: override?.generatedAt ?? bundledPricingTableFile.generatedAt,
+  };
+}
+
+/** The bundled-only context -- used whenever no override was loaded. */
+export const defaultPricingContext: PricingContext = createPricingContext();
+
+/** Age of `generatedAt` in whole days, for both the startup warning
+ * (service.ts) and the per-span attribute (spans.ts) -- one shared
+ * definition of "how old" so the two surfaces the user asked for always
+ * agree with each other. */
+export function pricingAgeDays(generatedAt: string, now: number = Date.now()): number {
+  const generatedMs = Date.parse(generatedAt);
+  if (Number.isNaN(generatedMs)) return Number.POSITIVE_INFINITY;
+  return Math.floor((now - generatedMs) / (24 * 60 * 60 * 1000));
+}

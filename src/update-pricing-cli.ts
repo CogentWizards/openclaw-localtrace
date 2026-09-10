@@ -17,7 +17,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { defaultOverridePath, type PricingEntry, type PricingTable } from "./pricing.js";
+import { defaultOverridePath, type PricingEntry, type PricingTable, type PricingTableFile } from "./pricing.js";
 
 const SOURCE_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -88,10 +88,11 @@ async function main(): Promise<void> {
     byProvider[entry.provider] = (byProvider[entry.provider] ?? 0) + 1;
   }
 
+  const file: PricingTableFile = { generatedAt: new Date().toISOString(), entries: table };
   await mkdir(path.dirname(outPath), { recursive: true });
-  await writeFile(outPath, JSON.stringify(table, null, 2) + "\n", "utf-8");
+  await writeFile(outPath, JSON.stringify(file, null, 2) + "\n", "utf-8");
 
-  console.log(`Wrote ${Object.keys(table).length} entries to ${outPath}`);
+  console.log(`Wrote ${Object.keys(table).length} entries to ${outPath} (generatedAt: ${file.generatedAt})`);
   console.log("By provider:", byProvider);
   if (outPath === defaultOverridePath) {
     console.log(
