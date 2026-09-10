@@ -19,9 +19,8 @@
  * gemini, vertex_ai-language-models, xai, deepseek, mistral. It WILL go
  * stale as new models ship -- an unrecognized model simply gets no
  * price (see `estimateCostUsd` below), never a guessed one. Regenerate
- * by re-running the extraction this table was built with against a
- * fresh copy of LiteLLM's JSON; see the openclaw-localtrace repo's own
- * CONTRIBUTING notes.
+ * with `npm run update-pricing-table` (see scripts/update-pricing-table.mjs),
+ * review the diff, and commit it like any other change.
  *
  * OpenClaw's own cost-estimation machinery (`estimateAggregateUsageCost`/
  * `resolveModelCostConfig` in its compiled source) additionally layers in

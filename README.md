@@ -64,6 +64,10 @@ plugin's own "no code path reaches the network" design. It's a plain
 provider-published-rate estimate: it doesn't know about your own
 negotiated/discounted pricing, and it goes stale as new models ship —
 an unrecognized model simply gets no cost estimate, never a guessed one.
+Refresh it with `npm run update-pricing-table` (fetches a fresh copy of
+LiteLLM's data, the only network access anywhere in this repo's own
+tooling — the plugin itself still never does this at runtime), review
+the diff, and commit it.
 
 Everything else is out of scope for v1 — this plugin exists to feed
 tools like [`redundo`](https://github.com/CogentWizards/redundo), not to
