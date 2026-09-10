@@ -17,6 +17,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultOverridePath, type PricingEntry, type PricingTable, type PricingTableFile } from "./pricing.js";
 
 const SOURCE_URL =
@@ -43,10 +44,42 @@ const RESELLER_PREFIXES = [
   "cloudflare/", "friendliai/", "nvidia_nim/", "deepinfra/", "nscale/", "novita/",
 ];
 
-function parseArgs(argv: string[]): { outPath: string } {
-  const outIndex = argv.indexOf("--out");
-  const outPath = outIndex >= 0 && argv[outIndex + 1] ? argv[outIndex + 1] : defaultOverridePath;
-  return { outPath };
+export const USAGE = `Usage: openclaw-localtrace-update-pricing [--out <path>] [--help]
+
+Fetches a curated LiteLLM pricing snapshot and writes it as this plugin's
+pricing-table override (defaults to ${defaultOverridePath}).
+
+Options:
+  --out <path>  Write the pricing table to a custom location instead of
+                the plugin's default override path.
+  -h, --help    Show this help message and exit, without fetching anything.`;
+
+export interface ParsedArgs {
+  help: boolean;
+  outPath: string;
+}
+
+export function parseArgs(argv: string[]): ParsedArgs {
+  let outPath = defaultOverridePath;
+  let help = false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+      continue;
+    }
+    if (arg === "--out") {
+      const value = argv[i + 1];
+      if (!value) {
+        throw new Error("--out requires a path argument");
+      }
+      outPath = value;
+      i++;
+      continue;
+    }
+    throw new Error(`unrecognized argument: ${arg}`);
+  }
+  return { help, outPath };
 }
 
 async function fetchPricingTable(): Promise<PricingTable> {
@@ -80,7 +113,21 @@ async function fetchPricingTable(): Promise<PricingTable> {
 }
 
 async function main(): Promise<void> {
-  const { outPath } = parseArgs(process.argv.slice(2));
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(`\n${USAGE}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (parsed.help) {
+    console.log(USAGE);
+    return;
+  }
+
+  const { outPath } = parsed;
   console.log(`Fetching pricing data from ${SOURCE_URL} ...`);
   const table = await fetchPricingTable();
   const byProvider: Record<string, number> = {};
@@ -107,7 +154,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(`openclaw-localtrace-update-pricing failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+// Only run when invoked directly (as the CLI/bin entry) -- never as a side
+// effect of another module importing from this file (e.g. a test importing
+// parseArgs), which would otherwise fetch real pricing data and write a
+// real file as an accidental side effect of module load.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((error: unknown) => {
+    console.error(`openclaw-localtrace-update-pricing failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
