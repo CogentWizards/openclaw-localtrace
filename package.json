@@ -8,6 +8,9 @@
   },
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "openclaw-localtrace-update-pricing": "./dist/update-pricing-cli.js"
+  },
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },

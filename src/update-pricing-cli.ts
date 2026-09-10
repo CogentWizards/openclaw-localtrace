@@ -1,0 +1,112 @@
+#!/usr/bin/env node
+/**
+ * Shipped as this package's own bin entry (`openclaw-localtrace-update-pricing`
+ * -- runnable via `npx openclaw-localtrace-update-pricing` whether or not
+ * the package is separately installed) so that anyone with only the
+ * published plugin -- no repo checkout, no dev tooling -- can still
+ * refresh pricing data on their own machine without waiting for a new
+ * release. See pricing.ts's own module docstring for how this fits
+ * alongside the repo-only `npm run update-pricing-table` dev script.
+ *
+ * Writes to `defaultOverridePath` (a fixed location under
+ * `~/.openclaw/openclaw-localtrace/`) unless told otherwise with --out;
+ * the plugin checks that same default path automatically on Gateway
+ * start, so the common case needs no config change at all -- just re-run
+ * this, then restart the Gateway.
+ */
+
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { defaultOverridePath, type PricingEntry, type PricingTable } from "./pricing.js";
+
+const SOURCE_URL =
+  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+
+// Kept in sync with scripts/update-pricing-table.mjs's own filtering --
+// see that file if these ever need to change; duplicated rather than
+// shared because that script runs directly against source (pre-build),
+// while this one ships as compiled output the published package carries.
+const WANTED_PROVIDERS = new Set([
+  "anthropic",
+  "openai",
+  "gemini",
+  "vertex_ai-language-models",
+  "xai",
+  "deepseek",
+  "mistral",
+]);
+
+const RESELLER_PREFIXES = [
+  "azure/", "azure_ai/", "bedrock/", "bedrock_converse/", "vertex_ai/", "vertex_ai_beta/",
+  "databricks/", "anyscale/", "together_ai/", "fireworks_ai/", "openrouter/", "groq/",
+  "perplexity/", "cerebras/", "sagemaker/", "sagemaker_chat/", "watsonx/", "replicate/",
+  "cloudflare/", "friendliai/", "nvidia_nim/", "deepinfra/", "nscale/", "novita/",
+];
+
+function parseArgs(argv: string[]): { outPath: string } {
+  const outIndex = argv.indexOf("--out");
+  const outPath = outIndex >= 0 && argv[outIndex + 1] ? argv[outIndex + 1] : defaultOverridePath;
+  return { outPath };
+}
+
+async function fetchPricingTable(): Promise<PricingTable> {
+  const response = await fetch(SOURCE_URL);
+  if (!response.ok) {
+    throw new Error(`fetch failed: ${response.status} ${response.statusText}`);
+  }
+  const data = (await response.json()) as Record<string, Record<string, unknown>>;
+
+  const curated: PricingTable = {};
+  for (const [key, entry] of Object.entries(data)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const provider = entry.litellm_provider;
+    if (typeof provider !== "string" || !WANTED_PROVIDERS.has(provider)) continue;
+    if (RESELLER_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    const input = entry.input_cost_per_token;
+    const output = entry.output_cost_per_token;
+    if (typeof input !== "number" || typeof output !== "number") continue;
+    const cacheRead = entry.cache_read_input_token_cost;
+    const cacheWrite = entry.cache_creation_input_token_cost;
+    const priced: PricingEntry = {
+      cacheRead: typeof cacheRead === "number" ? cacheRead : null,
+      cacheWrite: typeof cacheWrite === "number" ? cacheWrite : null,
+      input,
+      output,
+      provider,
+    };
+    curated[key] = priced;
+  }
+  return curated;
+}
+
+async function main(): Promise<void> {
+  const { outPath } = parseArgs(process.argv.slice(2));
+  console.log(`Fetching pricing data from ${SOURCE_URL} ...`);
+  const table = await fetchPricingTable();
+  const byProvider: Record<string, number> = {};
+  for (const entry of Object.values(table)) {
+    byProvider[entry.provider] = (byProvider[entry.provider] ?? 0) + 1;
+  }
+
+  await mkdir(path.dirname(outPath), { recursive: true });
+  await writeFile(outPath, JSON.stringify(table, null, 2) + "\n", "utf-8");
+
+  console.log(`Wrote ${Object.keys(table).length} entries to ${outPath}`);
+  console.log("By provider:", byProvider);
+  if (outPath === defaultOverridePath) {
+    console.log(
+      "This is the plugin's default override location -- restart the OpenClaw Gateway " +
+        "and it will be picked up automatically, no config change needed.",
+    );
+  } else {
+    console.log(
+      `Custom output path -- set plugins.entries.openclaw-localtrace.config.pricingTableOverridePath ` +
+        `to "${outPath}" (openclaw config set ...) and restart the Gateway for this to take effect.`,
+    );
+  }
+}
+
+main().catch((error: unknown) => {
+  console.error(`openclaw-localtrace-update-pricing failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

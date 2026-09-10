@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
@@ -10,6 +11,7 @@ import { resolveConfig } from "./config.js";
 import { writeOtlpBatch } from "./file-writer.js";
 import { TurnCostMapper } from "./metrics.js";
 import { attributesToOtlp, metricsDocument, type OtlpKeyValue } from "./otlp-json.js";
+import { createPricingResolver, type PricingResolver, type PricingTable } from "./pricing.js";
 import { sweepRetention } from "./retention.js";
 import type { RuntimeHandle } from "./runtime-handle.js";
 import { FileSpanExporter } from "./span-exporter.js";
@@ -29,6 +31,36 @@ function pluginConfig(ctx: OpenClawPluginServiceContext): Record<string, unknown
 function buildResourceAttributes(): OtlpKeyValue[] {
   const resource = resourceFromAttributes({ [ATTR_SERVICE_NAME]: PLUGIN_ID });
   return attributesToOtlp(resource.attributes);
+}
+
+/** Loads a pricing override file, if one exists at `overridePath` -- see
+ * pricing.ts's own module docstring for the two audiences this serves
+ * (a repo checkout regenerating the bundled table vs. anyone with only
+ * the published package installed, who can't wait for a new release).
+ * A missing file is the normal default state (no override configured,
+ * or the update command was never run) and produces no log at all;
+ * only a file that exists but fails to parse is worth a warning -- that
+ * is a real misconfiguration, not an absence. */
+export async function loadPricingResolver(
+  overridePath: string,
+  logger: OpenClawPluginServiceContext["logger"],
+): Promise<PricingResolver> {
+  let raw: string;
+  try {
+    raw = await readFile(overridePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return createPricingResolver();
+    logger.warn(`openclaw-localtrace: could not read pricing override at ${overridePath}: ${String(error)}`);
+    return createPricingResolver();
+  }
+  try {
+    const overrideTable = JSON.parse(raw) as PricingTable;
+    logger.info(`openclaw-localtrace: loaded a pricing override from ${overridePath}`);
+    return createPricingResolver(overrideTable);
+  } catch (error) {
+    logger.warn(`openclaw-localtrace: pricing override at ${overridePath} is not valid JSON, ignoring it: ${String(error)}`);
+    return createPricingResolver();
+  }
 }
 
 /**
@@ -59,9 +91,11 @@ export function createLocaltraceService(handle: RuntimeHandle): OpenClawPluginSe
         spanProcessors: [new BatchSpanProcessor(exporter)],
       });
 
+      const pricingResolver = await loadPricingResolver(config.pricingTableOverridePath, ctx.logger);
+
       handle.current = {
         outputDir: config.outputDir,
-        spanMapper: new SpanMapper(provider, config),
+        spanMapper: new SpanMapper(provider, config, pricingResolver),
         turnCostMapper: new TurnCostMapper(config),
       };
 

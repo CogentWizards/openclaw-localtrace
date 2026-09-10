@@ -74,7 +74,7 @@
 import { ROOT_CONTEXT, SpanKind, SpanStatusCode, trace, type Attributes, type Span } from "@opentelemetry/api";
 import type { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { LocaltraceConfig } from "./config.js";
-import { estimateCostUsd } from "./pricing.js";
+import { estimateCostUsd, type PricingResolver } from "./pricing.js";
 import { pruneUndefined } from "./utils.js";
 
 const TRACER_NAME = "openclaw-localtrace";
@@ -217,10 +217,12 @@ export class SpanMapper {
    * under the same run, not an enrichment of it. */
   private readonly llmCallSpans = new SpanTracker();
   private readonly toolExecutionSpans = new SpanTracker();
+  private readonly pricingResolver: PricingResolver;
 
-  constructor(provider: BasicTracerProvider, config: LocaltraceConfig) {
+  constructor(provider: BasicTracerProvider, config: LocaltraceConfig, pricingResolver: PricingResolver = estimateCostUsd) {
     this.tracer = provider.getTracer(TRACER_NAME);
     this.config = config;
+    this.pricingResolver = pricingResolver;
   }
 
   private identifierAttrs(ids: Record<string, string | undefined>): Attributes {
@@ -327,7 +329,7 @@ export class SpanMapper {
       // pricing.ts's own module docstring for why this isn't a live
       // lookup. Not gated behind captureContent: like the token counts
       // above, this is derived data, not raw prompt/response content.
-      const costUsd = estimateCostUsd(event.provider, event.model, event.usage);
+      const costUsd = this.pricingResolver(event.provider, event.model, event.usage);
       if (costUsd !== undefined) span.setAttribute("gen_ai.usage.cost_usd", costUsd);
     }
     if (this.config.captureContent) {

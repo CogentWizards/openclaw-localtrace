@@ -11,6 +11,8 @@
  * dependency need heavy enough to justify one.
  */
 
+import { defaultOverridePath } from "./pricing.js";
+
 export interface LocaltraceConfig {
   enabled: boolean;
   outputDir: string;
@@ -19,6 +21,7 @@ export interface LocaltraceConfig {
   maxOutputBytes: number;
   maxAgeDays: number;
   mutatingToolNames: readonly string[];
+  pricingTableOverridePath: string;
 }
 
 const DEFAULT_MAX_OUTPUT_BYTES = 500 * 1024 * 1024; // 500 MiB
@@ -81,5 +84,14 @@ export function resolveConfig(
     maxOutputBytes: readPositiveNumber(cfg, "maxOutputBytes", DEFAULT_MAX_OUTPUT_BYTES),
     maxAgeDays: readPositiveNumber(cfg, "maxAgeDays", DEFAULT_MAX_AGE_DAYS),
     mutatingToolNames: readStringArray(cfg, "mutatingToolNames", DEFAULT_MUTATING_TOOL_NAMES),
+    // Default doesn't depend on any per-call context (unlike
+    // defaultOutputDir, which needs ctx.stateDir) -- see pricing.ts's own
+    // docstring for why this fixed path is the plugin's own contract,
+    // not a guess at some other component's directory convention.
+    pricingTableOverridePath: readNonEmptyString(
+      cfg,
+      "pricingTableOverridePath",
+      defaultOverridePath,
+    ),
   };
 }

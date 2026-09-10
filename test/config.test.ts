@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_MUTATING_TOOL_NAMES, resolveConfig } from "../src/config.js";
+import { defaultOverridePath } from "../src/pricing.js";
 
 test("resolveConfig: everything defaults to the safe/off option when unset", () => {
   const config = resolveConfig(undefined, "/default/dir");
@@ -12,7 +13,13 @@ test("resolveConfig: everything defaults to the safe/off option when unset", () 
     maxOutputBytes: 500 * 1024 * 1024,
     maxAgeDays: 14,
     mutatingToolNames: DEFAULT_MUTATING_TOOL_NAMES,
+    pricingTableOverridePath: defaultOverridePath,
   });
+});
+
+test("resolveConfig: pricingTableOverridePath can be overridden", () => {
+  const config = resolveConfig({ pricingTableOverridePath: "/custom/path.json" }, "/default/dir");
+  assert.equal(config.pricingTableOverridePath, "/custom/path.json");
 });
 
 test("resolveConfig: mutatingToolNames overrides the default list", () => {
