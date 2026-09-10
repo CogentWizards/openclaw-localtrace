@@ -16,7 +16,8 @@
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build:test && node --test dist-test/test/",
     "validate": "openclaw plugins validate --json",
-    "pack": "openclaw plugins pack --json"
+    "pack": "openclaw plugins pack --json",
+    "update-pricing-table": "node scripts/update-pricing-table.mjs"
   },
   "dependencies": {
     "@opentelemetry/api": "1.9.1",
