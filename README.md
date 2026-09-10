@@ -46,9 +46,24 @@ by the plugin's own operator, in their own config — see Setup below.
 |---|---|---|
 | `before_agent_run` / `agent_end` | span `openclaw-localtrace.run` | requires `hooks.allowConversationAccess` |
 | `model_call_started` / `model_call_ended` | span `openclaw-localtrace.model.call` | **no permission opt-in needed** — sanitized, no content |
-| `llm_input` / `llm_output` | enriches the open `model.call` span with prompt/response content and token usage | content gated by `captureContent`; requires `hooks.allowConversationAccess`; token usage always attaches once the hook fires |
+| `llm_input` / `llm_output` | span `openclaw-localtrace.llm.call` | own span, not an enrichment of `model.call` — confirmed live that it brackets the *whole run* (opens before the first model call, closes after the last), not one individual call; content gated by `captureContent`, requires `hooks.allowConversationAccess`; token usage and the estimated `gen_ai.usage.cost_usd` below always attach once the hook fires |
 | `before_tool_call` / `after_tool_call` | span `openclaw-localtrace.tool.execution` | **no permission opt-in needed**; includes `openclaw.mutatingAction`, a best-effort write/mutation classification from a configurable tool-name list (see `mutatingToolNames`) — there is no host-computed equivalent on this hook, unlike the old diagnostics-bus event |
-| `reply_payload_sending` | metric `openclaw.turn.cost.usd` | **no permission opt-in needed**; one gauge point per turn, from `usageState.turnUsd` — still an estimate from a configured cost table, not a certified per-call billed amount |
+| `reply_payload_sending` | metric `openclaw.turn.cost.usd` | **no permission opt-in needed**; one gauge point per turn, from `usageState.turnUsd` — only fires on live-dispatcher-delivered replies (confirmed against real usage: durable/recovered/replayed deliveries never carry it), so coverage is genuinely sparse |
+
+### Per-call cost estimate: `gen_ai.usage.cost_usd`
+
+`openclaw.turn.cost.usd` above turned out to have real coverage gaps in
+practice — it only fires for certain reply-delivery paths, so a live
+capture can easily have real spend on a turn that never produces one.
+`llm.call` spans additionally carry `gen_ai.usage.cost_usd`, computed
+directly from that call's own token usage against a **bundled, static
+pricing snapshot** (`src/pricing-table.json`, a curated subset of
+[LiteLLM's public pricing data](https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json)
+for six major providers) — never a live network fetch, matching this
+plugin's own "no code path reaches the network" design. It's a plain
+provider-published-rate estimate: it doesn't know about your own
+negotiated/discounted pricing, and it goes stale as new models ship —
+an unrecognized model simply gets no cost estimate, never a guessed one.
 
 Everything else is out of scope for v1 — this plugin exists to feed
 tools like [`redundo`](https://github.com/CogentWizards/redundo), not to

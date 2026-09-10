@@ -85,6 +85,36 @@ test("SpanMapper: llm_input opens and llm_output closes its own llm.call span, i
   assert.equal(llmCallSpan.attributes["gen_ai.usage.output_tokens"], 20);
 });
 
+test("SpanMapper: llm.call gets an estimated gen_ai.usage.cost_usd for a recognized provider/model, regardless of captureContent", () => {
+  const { exporter, mapper } = harness({ captureContent: false });
+  mapper.onLlmInput({ runId: "r1", prompt: "hi", historyMessages: [] });
+  mapper.onLlmOutput({
+    runId: "r1",
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    assistantTexts: ["hello"],
+    usage: { input: 1000, output: 500 },
+  });
+  const span = exporter.getFinishedSpans()[0];
+  const cost = span.attributes["gen_ai.usage.cost_usd"];
+  assert.equal(typeof cost, "number");
+  assert.ok((cost as number) > 0);
+});
+
+test("SpanMapper: llm.call has no cost_usd attribute for an unrecognized model", () => {
+  const { exporter, mapper } = harness();
+  mapper.onLlmInput({ runId: "r1", prompt: "hi", historyMessages: [] });
+  mapper.onLlmOutput({
+    runId: "r1",
+    provider: "some-unknown-provider",
+    model: "some-unknown-model",
+    assistantTexts: ["hello"],
+    usage: { input: 1000, output: 500 },
+  });
+  const span = exporter.getFinishedSpans()[0];
+  assert.equal(span.attributes["gen_ai.usage.cost_usd"], undefined);
+});
+
 test("SpanMapper: llm.call content is omitted unless captureContent is on, usage tokens always attach", () => {
   const off = harness({ captureContent: false });
   off.mapper.onLlmInput({ runId: "r1", prompt: "secret prompt", historyMessages: [] });
