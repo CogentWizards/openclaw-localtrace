@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { resolveConfig } from "../src/config.js";
+import type { PricingContext } from "../src/pricing.js";
 import { SpanMapper } from "../src/spans.js";
 
-function harness(overrides: Partial<ReturnType<typeof resolveConfig>> = {}) {
+function harness(overrides: Partial<ReturnType<typeof resolveConfig>> = {}, pricingContext?: PricingContext) {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
   const config = { ...resolveConfig(undefined, "/tmp/unused"), ...overrides };
-  const mapper = new SpanMapper(provider, config);
+  const mapper = pricingContext
+    ? new SpanMapper(provider, config, pricingContext)
+    : new SpanMapper(provider, config);
   return { exporter, mapper };
 }
 
@@ -99,6 +102,42 @@ test("SpanMapper: llm.call gets an estimated gen_ai.usage.cost_usd for a recogni
   const cost = span.attributes["gen_ai.usage.cost_usd"];
   assert.equal(typeof cost, "number");
   assert.ok((cost as number) > 0);
+});
+
+test("SpanMapper: llm.call carries openclaw.pricingTableGeneratedAt alongside a real cost estimate", () => {
+  const { exporter, mapper } = harness({}, {
+    estimateCostUsd: () => 0.5,
+    generatedAt: "2020-01-01T00:00:00.000Z",
+  });
+  mapper.onLlmInput({ runId: "r1", prompt: "hi", historyMessages: [] });
+  mapper.onLlmOutput({
+    runId: "r1",
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    assistantTexts: ["hello"],
+    usage: { input: 1000, output: 500 },
+  });
+  const span = exporter.getFinishedSpans()[0];
+  assert.equal(span.attributes["gen_ai.usage.cost_usd"], 0.5);
+  assert.equal(span.attributes["openclaw.pricingTableGeneratedAt"], "2020-01-01T00:00:00.000Z");
+});
+
+test("SpanMapper: no pricingTableGeneratedAt attribute when there's no cost estimate to go with it", () => {
+  const { exporter, mapper } = harness({}, {
+    estimateCostUsd: () => undefined,
+    generatedAt: "2020-01-01T00:00:00.000Z",
+  });
+  mapper.onLlmInput({ runId: "r1", prompt: "hi", historyMessages: [] });
+  mapper.onLlmOutput({
+    runId: "r1",
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    assistantTexts: ["hello"],
+    usage: { input: 1000, output: 500 },
+  });
+  const span = exporter.getFinishedSpans()[0];
+  assert.equal(span.attributes["gen_ai.usage.cost_usd"], undefined);
+  assert.equal(span.attributes["openclaw.pricingTableGeneratedAt"], undefined);
 });
 
 test("SpanMapper: llm.call has no cost_usd attribute for an unrecognized model", () => {

@@ -74,7 +74,7 @@
 import { ROOT_CONTEXT, SpanKind, SpanStatusCode, trace, type Attributes, type Span } from "@opentelemetry/api";
 import type { BasicTracerProvider } from "@opentelemetry/sdk-trace-base";
 import type { LocaltraceConfig } from "./config.js";
-import { estimateCostUsd, type PricingResolver } from "./pricing.js";
+import { defaultPricingContext, type PricingContext } from "./pricing.js";
 import { pruneUndefined } from "./utils.js";
 
 const TRACER_NAME = "openclaw-localtrace";
@@ -217,12 +217,12 @@ export class SpanMapper {
    * under the same run, not an enrichment of it. */
   private readonly llmCallSpans = new SpanTracker();
   private readonly toolExecutionSpans = new SpanTracker();
-  private readonly pricingResolver: PricingResolver;
+  private readonly pricingContext: PricingContext;
 
-  constructor(provider: BasicTracerProvider, config: LocaltraceConfig, pricingResolver: PricingResolver = estimateCostUsd) {
+  constructor(provider: BasicTracerProvider, config: LocaltraceConfig, pricingContext: PricingContext = defaultPricingContext) {
     this.tracer = provider.getTracer(TRACER_NAME);
     this.config = config;
-    this.pricingResolver = pricingResolver;
+    this.pricingContext = pricingContext;
   }
 
   private identifierAttrs(ids: Record<string, string | undefined>): Attributes {
@@ -325,12 +325,21 @@ export class SpanMapper {
       if (event.usage.output !== undefined) span.setAttribute("gen_ai.usage.output_tokens", event.usage.output);
       if (event.usage.cacheRead !== undefined) span.setAttribute("gen_ai.usage.cache_read.input_tokens", event.usage.cacheRead);
       if (event.usage.cacheWrite !== undefined) span.setAttribute("gen_ai.usage.cache_creation.input_tokens", event.usage.cacheWrite);
-      // Estimated, from a bundled static pricing snapshot -- see
+      // Estimated, from this plugin's own bundled/fetched pricing
+      // snapshot -- NOT OpenClaw's own internal pricing catalog, see
       // pricing.ts's own module docstring for why this isn't a live
       // lookup. Not gated behind captureContent: like the token counts
       // above, this is derived data, not raw prompt/response content.
-      const costUsd = this.pricingResolver(event.provider, event.model, event.usage);
-      if (costUsd !== undefined) span.setAttribute("gen_ai.usage.cost_usd", costUsd);
+      const costUsd = this.pricingContext.estimateCostUsd(event.provider, event.model, event.usage);
+      if (costUsd !== undefined) {
+        span.setAttribute("gen_ai.usage.cost_usd", costUsd);
+        // Always attached alongside the estimate, not gated behind any
+        // config flag -- a dollar figure with no visible age is exactly
+        // the "confidently wrong, indistinguishable from correct" failure
+        // mode this plugin's own bundled data is most at risk of; see the
+        // module docstring above.
+        span.setAttribute("openclaw.pricingTableGeneratedAt", this.pricingContext.generatedAt);
+      }
     }
     if (this.config.captureContent) {
       span.setAttribute("gen_ai.output.messages", JSON.stringify(event.assistantTexts));
