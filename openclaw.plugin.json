@@ -45,7 +45,7 @@
       },
       "pricingTableOverridePath": {
         "type": "string",
-        "description": "Path to a local pricing-table JSON file (same shape as this plugin's own bundled src/pricing-table.json) layered over the bundled snapshot for gen_ai.usage.cost_usd estimates -- an override entry wins per provider/model, everything else still falls back to the bundled table. Defaults to a fixed path under ~/.openclaw/openclaw-localtrace/, which the bundled `openclaw-localtrace-update-pricing` command (npx openclaw-localtrace-update-pricing) writes to by default -- refresh pricing without waiting for a new plugin release. See README."
+        "description": "Path to a local pricing-table JSON file (same shape as this plugin's own bundled src/pricing-table.json) layered over the bundled snapshot for gen_ai.usage.cost_usd estimates -- an override entry wins per provider/model, everything else still falls back to the bundled table. Defaults to a fixed path under ~/.openclaw/openclaw-localtrace/, which the bundled `openclaw-localtrace-update-pricing` command (npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing) writes to by default -- refresh pricing without waiting for a new plugin release. See README."
       }
     }
   }
