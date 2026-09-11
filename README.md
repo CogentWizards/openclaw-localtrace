@@ -136,10 +136,33 @@ this plugin's output directly — no intermediate collector needed.
 ## Setup
 
 ```bash
-openclaw plugins install <path-or-npm-spec>
+openclaw plugins install openclaw-localtrace --force --accept-capabilities --acknowledge-install-policy-warning
 openclaw plugins enable openclaw-localtrace
 openclaw config set plugins.entries.openclaw-localtrace.config.enabled true
 ```
+
+All three install flags are required, not optional convenience -- a bare
+`openclaw plugins install openclaw-localtrace` fails twice in a row, and
+the second failure leaves the plugin disabled with its config wiped
+rather than rolling back cleanly, so don't skip these:
+
+- `--force` confirms installing from a source outside ClawHub's own
+  review/trust metadata (this is an ordinary npm package, not a
+  ClawHub-listed one).
+- `--accept-capabilities` consents to the real capabilities this plugin
+  declares -- it registers conversation-content hooks
+  (`before_agent_run`/`agent_end`/`llm_input`/`llm_output`), gated
+  separately behind `hooks.allowConversationAccess` below.
+- `--acknowledge-install-policy-warning` acknowledges any
+  `security.installPolicy` warning non-interactively; harmless to include
+  even if your config has no such policy configured.
+
+To install a specific version instead of whatever `latest` resolves to,
+use `openclaw-localtrace@<version>` in place of the bare package name,
+and add `--pin` to record the exact resolved version rather than a
+range (recommended if you plan to control upgrades explicitly via
+`openclaw plugins update` rather than picking up new versions
+automatically).
 
 Grant this plugin access to conversation-scoped hooks (`before_agent_run`,
 `agent_end`, `llm_input`, `llm_output`) — without this, only
