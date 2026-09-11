@@ -84,7 +84,7 @@ test("pricingStalenessWarning: warns once past 30 days old", () => {
   assert.ok(warning);
   assert.match(warning, /31 day\(s\) old/);
   assert.match(warning, /NOT OpenClaw's built-in pricing/);
-  assert.match(warning, /npx openclaw-localtrace-update-pricing/);
+  assert.match(warning, /npx -p @cogentwizards\/openclaw-localtrace openclaw-localtrace-update-pricing/);
 });
 
 test("pricingStalenessWarning: an unparseable generatedAt is treated as infinitely stale, not silently fresh", () => {

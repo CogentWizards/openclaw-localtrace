@@ -148,7 +148,8 @@ export function pricingStalenessWarning(
     `openclaw-localtrace: this plugin's own pricing data (NOT OpenClaw's built-in pricing) is ` +
     `${ageDays} day(s) old (generated ${generatedAt}) -- provider rates may have changed since ` +
     "then, and gen_ai.usage.cost_usd estimates could be off as a result. Refresh with: npx " +
-    "openclaw-localtrace-update-pricing (then restart the Gateway)."
+    "-p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing (then restart " +
+    "the Gateway)."
   );
 }
 

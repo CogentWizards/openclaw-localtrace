@@ -75,8 +75,13 @@ tooling, most users once this is on npm — you don't have to wait for a
 new release every time a model is missing:
 
 ```bash
-npx openclaw-localtrace-update-pricing
+npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing
 ```
+
+(The `-p <package>` is required, not optional style -- the bin command's
+own name doesn't match the package name, and a bare `npx
+openclaw-localtrace-update-pricing` 404s looking for a package literally
+named that, rather than resolving it by bin name.)
 
 This is a real bin command shipped inside the published package. It
 fetches the same LiteLLM data and writes it to a fixed default location
@@ -136,15 +141,21 @@ this plugin's output directly — no intermediate collector needed.
 ## Setup
 
 ```bash
-openclaw plugins install openclaw-localtrace --force --accept-capabilities --acknowledge-install-policy-warning
+openclaw plugins install @cogentwizards/openclaw-localtrace --force --accept-capabilities --acknowledge-install-policy-warning
 openclaw plugins enable openclaw-localtrace
 openclaw config set plugins.entries.openclaw-localtrace.config.enabled true
 ```
 
+(The npm *package* is scoped, `@cogentwizards/openclaw-localtrace` --
+but the plugin's own `id`, used everywhere else here
+(`plugins.entries.openclaw-localtrace.*`, `plugins enable
+openclaw-localtrace`), stays unscoped. These are two different
+namespaces that happen to share a name.)
+
 All three install flags are required, not optional convenience -- a bare
-`openclaw plugins install openclaw-localtrace` fails twice in a row, and
-the second failure leaves the plugin disabled with its config wiped
-rather than rolling back cleanly, so don't skip these:
+`openclaw plugins install @cogentwizards/openclaw-localtrace` fails
+twice in a row, and the second failure leaves the plugin disabled with
+its config wiped rather than rolling back cleanly, so don't skip these:
 
 - `--force` confirms installing from a source outside ClawHub's own
   review/trust metadata (this is an ordinary npm package, not a
@@ -158,11 +169,11 @@ rather than rolling back cleanly, so don't skip these:
   even if your config has no such policy configured.
 
 To install a specific version instead of whatever `latest` resolves to,
-use `openclaw-localtrace@<version>` in place of the bare package name,
-and add `--pin` to record the exact resolved version rather than a
-range (recommended if you plan to control upgrades explicitly via
-`openclaw plugins update` rather than picking up new versions
-automatically).
+use `@cogentwizards/openclaw-localtrace@<version>` in place of the bare
+package name, and add `--pin` to record the exact resolved version
+rather than a range (recommended if you plan to control upgrades
+explicitly via `openclaw plugins update` rather than picking up new
+versions automatically).
 
 Grant this plugin access to conversation-scoped hooks (`before_agent_run`,
 `agent_end`, `llm_input`, `llm_output`) — without this, only

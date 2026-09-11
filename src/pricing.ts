@@ -56,7 +56,8 @@
  * - Anyone with only the published package installed -- most users, once
  *   this is on npm -- doesn't have that dev script and can't wait for a
  *   new release every time a model is missing or a price has drifted.
- *   `npx openclaw-localtrace-update-pricing` (shipped in the package)
+ *   `npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing`
+ *   (shipped in the package)
  *   fetches the same data and writes it to a fixed override path
  *   (`defaultOverridePath` below, or `--out <path>` + the plugin's own
  *   `pricingTableOverridePath` config) that this module checks at

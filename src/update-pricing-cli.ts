@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
  * Shipped as this package's own bin entry (`openclaw-localtrace-update-pricing`
- * -- runnable via `npx openclaw-localtrace-update-pricing` whether or not
- * the package is separately installed) so that anyone with only the
+ * -- runnable via `npx -p @cogentwizards/openclaw-localtrace
+ * openclaw-localtrace-update-pricing` whether or not the package is
+ * separately installed, since the bin name doesn't match the package name)
+ * so that anyone with only the
  * published plugin -- no repo checkout, no dev tooling -- can still
  * refresh pricing data on their own machine without waiting for a new
  * release. See pricing.ts's own module docstring for how this fits
