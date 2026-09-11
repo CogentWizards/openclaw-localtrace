@@ -1,6 +1,6 @@
 {
   "name": "openclaw-localtrace",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Full-fidelity OpenTelemetry capture for OpenClaw, written to your local filesystem only -- no redaction, no network export, no third-party backend.",
   "repository": {
     "type": "git",
