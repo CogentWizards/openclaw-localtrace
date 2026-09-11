@@ -16,6 +16,7 @@
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultOverridePath, type PricingEntry, type PricingTable, type PricingTableFile } from "./pricing.js";
@@ -158,7 +159,26 @@ async function main(): Promise<void> {
 // effect of another module importing from this file (e.g. a test importing
 // parseArgs), which would otherwise fetch real pricing data and write a
 // real file as an accidental side effect of module load.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+//
+// process.argv[1] must be realpath'd before comparing: npm always wires a
+// bin command up as a symlink (node_modules/.bin/<name> -> the real dist
+// file, and that's also exactly what `npx`/global installs run through),
+// so argv[1] is the symlink path while import.meta.url resolves through it
+// to the real file -- comparing the raw, un-resolved argv[1] against
+// import.meta.url therefore never matches for any real installed/npx
+// invocation, only for a same-directory `node dist/update-pricing-cli.js`
+// call. That gap wasn't caught before shipping because verification only
+// exercised the direct-file form, never the actual symlinked bin path.
+function isDirectInvocation(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return fileURLToPath(import.meta.url) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectInvocation()) {
   main().catch((error: unknown) => {
     console.error(`openclaw-localtrace-update-pricing failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
