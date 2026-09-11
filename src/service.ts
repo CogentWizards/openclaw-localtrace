@@ -169,7 +169,11 @@ export function createLocaltraceService(handle: RuntimeHandle): OpenClawPluginSe
     reload: { configPrefixes: [`plugins.entries.${PLUGIN_ID}.config`] },
 
     async start(ctx: OpenClawPluginServiceContext) {
-      const defaultOutputDir = path.join(ctx.stateDir, PLUGIN_ID);
+      // A dedicated "traces" subdir, not the plugin's state dir root directly --
+      // keeps rotating capture batches visually and operationally separate
+      // from the plugin's own singleton files (pricing-table.json) living
+      // alongside it in ctx.stateDir/PLUGIN_ID.
+      const defaultOutputDir = path.join(ctx.stateDir, PLUGIN_ID, "traces");
       const config = resolveConfig(pluginConfig(ctx), defaultOutputDir);
       if (!config.enabled) return;
 

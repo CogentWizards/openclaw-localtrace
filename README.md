@@ -170,6 +170,9 @@ openclaw config set plugins.entries.openclaw-localtrace.config.captureContent tr
 Optional:
 
 ```bash
+# Defaults to ~/.openclaw/openclaw-localtrace/traces/ if unset -- a
+# dedicated subdir, kept separate from this plugin's own singleton files
+# (e.g. pricing-table.json) that live one level up.
 openclaw config set plugins.entries.openclaw-localtrace.config.outputDir "/path/you/choose"
 openclaw config set plugins.entries.openclaw-localtrace.config.maxOutputBytes 524288000  # 500 MiB default
 openclaw config set plugins.entries.openclaw-localtrace.config.maxAgeDays 14             # default
