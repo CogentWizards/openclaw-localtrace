@@ -1,8 +1,9 @@
 name: Publish
 
-# Triggered by publishing a GitHub Release (same trigger CogentWizards/redundo
-# uses for its own PyPI publish workflow) -- cut the release, this does the
-# rest. Two independent publish targets, npm and ClawHub, each gated on the
+# Triggered by publishing a GitHub Release, the same trigger
+# CogentWizards/redundo uses for its own PyPI publish workflow. Cut the
+# release and this does the rest. Two independent publish targets, npm
+# and ClawHub, each gated on the
 # build+test step passing first.
 #
 # Required repository secrets, neither of which this workflow can create for
@@ -57,7 +58,7 @@ jobs:
           node-version: "26"
 
       # ClawHub packs its artifact from this checkout's own dist/ output,
-      # not from a bare GitHub ref -- dist/ is gitignored (a build
+      # not from a bare GitHub ref. dist/ is gitignored (a build
       # artifact), so publishing straight from a GitHub source ref instead
       # of a built local folder produces an artifact missing dist/ entirely
       # (confirmed the hard way: OpenClaw's installer failed with
@@ -84,10 +85,10 @@ jobs:
       # without it; --wait just blocks the CLI on a synchronous check that
       # isn't needed here.
       #
-      # RELEASE_NOTES goes through env:, not directly into the run: string
-      # -- release bodies are freeform, attacker-controllable text (anyone
+      # RELEASE_NOTES goes through env:, not directly into the run: string.
+      # Release bodies are freeform, attacker-controllable text (anyone
       # who can open a release on this repo controls this value), and
-      # interpolating it straight into a shell command is a real script-
+      # interpolating it straight into a shell command is a real script
       # injection vector in GitHub Actions.
       - name: Publish to ClawHub
         run: |
