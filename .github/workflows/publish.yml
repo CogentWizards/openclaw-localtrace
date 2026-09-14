@@ -6,11 +6,17 @@ name: Publish
 # and ClawHub, each gated on the
 # build+test step passing first.
 #
-# Required repository secrets, neither of which this workflow can create for
-# you (both are one-time setup steps outside this repo):
-#   NPM_TOKEN      An npm access token (Automation type, from npmjs.com ->
-#                   Access Tokens) with publish rights to
-#                   @cogentwizards/openclaw-localtrace.
+# npm publishing uses Trusted Publishing (OIDC), not a stored token: no
+# NPM_TOKEN secret exists or is needed. GitHub mints a short-lived,
+# workflow-scoped token for the publish-npm job below, and npm exchanges
+# it for a real publish credential at publish time. This needs a one-time
+# setup step outside this repo, on npmjs.com itself (Package settings ->
+# Trusted Publisher -> GitHub Actions), naming this repository and this
+# exact workflow filename, publish.yml. Same posture as
+# CogentWizards/redundo's own PyPI publish, which uses PyPI's equivalent
+# OIDC trusted publisher mechanism.
+#
+# ClawHub still needs a stored secret; it has no OIDC equivalent yet:
 #   CLAWHUB_TOKEN   A ClawHub API token. Log in once yourself
 #                   (`clawhub login`), then `clawhub token` prints the value
 #                   to store here.
@@ -22,11 +28,14 @@ jobs:
   publish-npm:
     name: Publish to npm
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "26"
           registry-url: "https://registry.npmjs.org"
@@ -42,8 +51,6 @@ jobs:
 
       - name: Publish to npm
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-clawhub:
     name: Publish to ClawHub
