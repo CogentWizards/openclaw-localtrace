@@ -1,33 +1,23 @@
 # openclaw-localtrace
 
-Full-fidelity OpenTelemetry capture for [OpenClaw](https://openclaw.ai),
-written **only to your local filesystem**. No redaction, no network
-export, no third-party backend.
+[![npm](https://img.shields.io/npm/v/%40cogentwizards%2Fopenclaw-localtrace.svg)](https://www.npmjs.com/package/@cogentwizards/openclaw-localtrace)
+[![CI](https://github.com/CogentWizards/openclaw-localtrace/actions/workflows/ci.yml/badge.svg)](https://github.com/CogentWizards/openclaw-localtrace/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## What you get
+Full-fidelity OpenTelemetry capture for [OpenClaw](https://openclaw.ai) — written only to your local filesystem. No redaction, no network export, no third-party backend.
 
-Real session IDs, a real write/mutation flag on every tool call, and a
-per-call cost estimate. These are the exact things OpenClaw's own
-official exporter, `@openclaw/diagnostics-otel`, deliberately strips
-before exporting anything. This plugin exists to keep them, without
-adding any network capability at all: there is no code path here that
-can send data anywhere except a directory on your own machine.
+- **Real session IDs and a real write/mutation flag** on every tool call — exactly what OpenClaw's own official exporter (`@openclaw/diagnostics-otel`) strips out before exporting anything.
+- **Nothing leaves your machine.** There is no code path here that can send data anywhere except a directory on disk.
+- **A real per-call cost estimate**, from this plugin's own bundled pricing snapshot.
 
 ```json
 { "name": "openclaw-localtrace.tool.execution", "attributes": {
     "openclaw.toolName": "apply_patch",
     "openclaw.mutatingAction": true,
     "openclaw.sessionId": "sess_abc123" } }
-{ "name": "openclaw-localtrace.llm.call", "attributes": {
-    "gen_ai.usage.input_tokens": 1200,
-    "gen_ai.usage.cost_usd": 0.0058,
-    "openclaw.pricingTableGeneratedAt": "2026-09-10T17:26:31.801Z" } }
 ```
 
-(Real output from this plugin's own `SpanMapper`, not a mockup.) See
-[docs/vs-diagnostics-otel.md](docs/vs-diagnostics-otel.md) for the full
-comparison. This is not a drop-in replacement, and you can run both
-plugins at once.
+(Real output from this plugin's own `SpanMapper`, not a mockup.) Full comparison with the official exporter: [docs/vs-diagnostics-otel.md](docs/vs-diagnostics-otel.md). Not a drop-in replacement — you can run both plugins at once.
 
 ## Install
 
@@ -46,162 +36,59 @@ openclaw plugins enable openclaw-localtrace
 openclaw config set plugins.entries.openclaw-localtrace.config.enabled true
 ```
 
-All three flags are required, not optional convenience. A bare
-`openclaw plugins install @cogentwizards/openclaw-localtrace` fails twice
-in a row, and the second failure leaves the plugin disabled with its
-config wiped rather than rolling back cleanly:
+All three flags are required, not optional convenience — a bare install
+fails twice in a row and leaves the plugin disabled with its config
+wiped rather than rolling back cleanly. `--force` confirms installing
+from outside ClawHub's own trust metadata; `--accept-capabilities`
+consents to the conversation-content hooks this plugin registers (gated
+separately behind `hooks.allowConversationAccess` below);
+`--acknowledge-install-policy-warning` acknowledges any
+`security.installPolicy` warning non-interactively.
 
-- `--force` confirms installing from a source outside ClawHub's own
-  review/trust metadata.
-- `--accept-capabilities` consents to the real capabilities this plugin
-  declares. It registers conversation-content hooks, gated separately
-  behind `hooks.allowConversationAccess` below.
-- `--acknowledge-install-policy-warning` acknowledges any
-  `security.installPolicy` warning non-interactively. Harmless to include
-  even if your config has no such policy configured.
-
-To install a specific version instead of `latest`, use
-`@cogentwizards/openclaw-localtrace@<version>` in place of the bare
-package name, and add `--pin` to record the exact resolved version rather
-than a range.
+Pin a specific version with `@cogentwizards/openclaw-localtrace@<version>` and `--pin`.
 
 </details>
 
-(The npm *package* is scoped, `@cogentwizards/openclaw-localtrace`, but
-the plugin's own `id`, used everywhere else here
-(`plugins.entries.openclaw-localtrace.*`, `plugins enable
-openclaw-localtrace`), stays unscoped. Two different namespaces that
-happen to share a name.)
+## Turn it on
 
-## Turn it on safely
-
-Every capability beyond basic tool/model spans is an explicit,
-off-by-default opt-in. Read each one before enabling:
+Every capability beyond basic tool/model spans is an explicit, off-by-default opt-in:
 
 ```bash
-# Unlocks before_agent_run/agent_end/llm_input/llm_output. Without this,
-# you still get model.call/tool.execution spans and turn-cost metrics --
-# all three need no permission at all. Lives under `hooks`, a sibling of
-# `config`, not inside it.
-openclaw config set plugins.entries.openclaw-localtrace.hooks.allowConversationAccess true
-
-# Include sessionId/runId/callId on spans and metrics. Off by default
-# even though this is this plugin's whole reason to exist: a local file
-# with real session identifiers is still real data at rest.
-openclaw config set plugins.entries.openclaw-localtrace.config.captureIdentifiers true
-
-# Include raw prompt/response/tool-argument/tool-result content. Off by
-# default, same reasoning as @openclaw/diagnostics-otel's own captureContent.
-openclaw config set plugins.entries.openclaw-localtrace.config.captureContent true
+openclaw config set plugins.entries.openclaw-localtrace.hooks.allowConversationAccess true      # unlocks run/llm.call spans
+openclaw config set plugins.entries.openclaw-localtrace.config.captureIdentifiers true           # real session/run/call ids
+openclaw config set plugins.entries.openclaw-localtrace.config.captureContent true               # raw prompt/tool content
+openclaw gateway restart
 ```
 
-Restart the Gateway after changing config.
-
-## Verify it worked
+Verify it worked:
 
 ```bash
 ls ~/.openclaw/openclaw-localtrace/traces/
+openclaw plugins inspect openclaw-localtrace --runtime --json   # look for "status": "loaded"
 ```
-
-Drive one real turn through the Gateway first if the directory is empty.
-Files land there within a few seconds; the OTel SDK batches writes, so
-it's not instant. Or check the plugin's own runtime status directly:
-
-```bash
-openclaw plugins inspect openclaw-localtrace --runtime --json
-```
-
-Look for `"status": "loaded"` and `"hookCount": 9`.
 
 ## What it captures
 
-| Hook(s) | Written as | Notes |
+| Hook(s) | Written as | Needs an opt-in? |
 |---|---|---|
-| `before_agent_run` / `agent_end` | span `openclaw-localtrace.run` | requires `hooks.allowConversationAccess` |
-| `model_call_started` / `model_call_ended` | span `openclaw-localtrace.model.call` | **no permission opt-in needed**: sanitized, no content |
-| `llm_input` / `llm_output` | span `openclaw-localtrace.llm.call` | own span, not an enrichment of `model.call`. Confirmed live that it brackets the *whole run* (opens before the first model call, closes after the last), not one individual call. Content is gated by `captureContent` and requires `hooks.allowConversationAccess`. Token usage and the estimated `gen_ai.usage.cost_usd` below always attach once the hook fires |
-| `before_tool_call` / `after_tool_call` | span `openclaw-localtrace.tool.execution` | **no permission opt-in needed**. Includes `openclaw.mutatingAction`, a best-effort write/mutation classification from a configurable tool-name list (see `mutatingToolNames`). There is no host-computed equivalent on this hook, unlike the old diagnostics-bus event |
-| `reply_payload_sending` | metric `openclaw.turn.cost.usd` | **no permission opt-in needed**. One gauge point per turn, from `usageState.turnUsd`. Only fires on live-dispatcher-delivered replies (confirmed against real usage: durable/recovered/replayed deliveries never carry it), so coverage is genuinely sparse |
+| `before_agent_run` / `agent_end` | span `openclaw-localtrace.run` | `allowConversationAccess` |
+| `model_call_started` / `model_call_ended` | span `openclaw-localtrace.model.call` | no |
+| `llm_input` / `llm_output` | span `openclaw-localtrace.llm.call` | content needs both opt-ins; token usage and cost always attach |
+| `before_tool_call` / `after_tool_call` | span `openclaw-localtrace.tool.execution` | no |
+| `reply_payload_sending` | metric `openclaw.turn.cost.usd` | no |
 
-See [docs/vs-diagnostics-otel.md](docs/vs-diagnostics-otel.md) for why
-this plugin uses hooks instead of the internal diagnostics bus
-`@openclaw/diagnostics-otel` uses.
-
-Output files use the exact same naming convention (`traces-*.otlp.json`,
-`logs-*.otlp.json`, `metrics-*.otlp.json`) and OTLP JSON shape that
-`redundo collect` already writes. So [`redundo adapt
-<outputDir>`](https://github.com/CogentWizards/redundo) reads this
-plugin's output directly, with no intermediate collector needed.
-Everything here exists to feed a downstream analysis tool like `redundo`,
-not to be a general Gateway-observability exporter.
-
-## Cost estimates
-
-`llm.call` spans carry `gen_ai.usage.cost_usd`, computed from that call's
-own token usage against a bundled, static LiteLLM-derived pricing
-snapshot. This is this plugin's own price list, a completely separate
-dataset from whatever OpenClaw uses internally for its own cost
-estimates.
-
-**A stale-but-present price is worse than a missing one.** A missing
-model visibly produces no `cost_usd` at all. A provider quietly changing
-a rate produces a confident, plausible-looking dollar figure that looks
-exactly like a correct one. So every estimate also carries
-`openclaw.pricingTableGeneratedAt` on the same span, always, and the
-Gateway logs a warning at startup once the active pricing data is more
-than 30 days old.
-
-Refresh it without waiting for a new plugin release:
+Feed the output straight to [`redundo`](https://github.com/CogentWizards/redundo) — same OTLP-JSON file format `redundo collect` writes, no collector needed:
 
 ```bash
-npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing
+redundo adapt "$(openclaw config get plugins.entries.openclaw-localtrace.config.outputDir)" \
+  --summary | redundo analyze --format html > report.html
 ```
 
-(The `-p <package>` is required: the bin command's name doesn't match the
-package name, so a bare `npx openclaw-localtrace-update-pricing` 404s
-looking for a package literally named that.) This writes to
-`~/.openclaw/openclaw-localtrace/pricing-table.json` by default, which
-the plugin checks automatically on every Gateway start. Restart the
-Gateway afterward. Pass `--out <path>` for a different location, together
-with:
+## Docs
 
-```bash
-openclaw config set plugins.entries.openclaw-localtrace.config.pricingTableOverridePath "<path>"
-```
-
-See [docs/pricing.md](docs/pricing.md) for why this plugin maintains its
-own catalog instead of reading OpenClaw's, and for the repo-checkout
-refresh path.
-
-## More config
-
-```bash
-# Defaults to ~/.openclaw/openclaw-localtrace/traces/ if unset -- a
-# dedicated subdir, kept separate from this plugin's own singleton files
-# (e.g. pricing-table.json) that live one level up.
-openclaw config set plugins.entries.openclaw-localtrace.config.outputDir "/path/you/choose"
-openclaw config set plugins.entries.openclaw-localtrace.config.maxOutputBytes 524288000  # 500 MiB default
-openclaw config set plugins.entries.openclaw-localtrace.config.maxAgeDays 14             # default
-
-# Tool names classified as a write/mutation on the openclaw.mutatingAction
-# span attribute. Defaults to a conservative built-in list (exec,
-# apply_patch, write_file, edit_file, delete_file) -- override if your
-# deployment adds custom tools with side effects.
-openclaw config set plugins.entries.openclaw-localtrace.config.mutatingToolNames '["exec","apply_patch","my_custom_tool"]'
-```
-
-## Local output retention
-
-This plugin runs continuously in the background for as long as the
-Gateway does, unlike a one-shot capture tool. Unbounded local capture is
-a real disk-exhaustion risk, not a hypothetical. A periodic sweep (hourly,
-not on every write) deletes files older than `maxAgeDays` first, then
-falls back to deleting the oldest remaining files if the directory is
-still over `maxOutputBytes`. Nothing younger than 60 seconds is ever
-touched, regardless of budget, as defense in depth against a file that
-might still be mid-write. Every sweep that actually deletes something
-logs what and how much, via the Gateway's own logger. This plugin never
-silently drops your capture history.
+- [docs/vs-diagnostics-otel.md](docs/vs-diagnostics-otel.md) — why this plugin exists, and why hooks instead of the internal diagnostics bus
+- [docs/pricing.md](docs/pricing.md) — how cost estimates work, and how to refresh the bundled pricing table
+- [docs/config.md](docs/config.md) — every config key, plus how local retention/cleanup works
 
 ## Development
 
@@ -211,11 +98,8 @@ npm run build       # compiles src/ -> dist/ (this is what actually ships)
 npm test            # compiles src/+test/ -> dist-test/, runs node --test against it
 ```
 
-No live Gateway or network access is needed for the test suite. The
-span-construction logic is tested against the real OTel SDK with an
-in-memory exporter, and the retention sweep against real temp-directory
-files with synthetic mtimes.
+No live Gateway or network access needed — the span-construction logic is tested against the real OTel SDK with an in-memory exporter.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
