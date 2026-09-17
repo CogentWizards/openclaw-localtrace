@@ -1,4 +1,4 @@
-# Pricing data: this plugin's own catalog, not OpenClaw's
+# Pricing data
 
 `gen_ai.usage.cost_usd` is computed from **this plugin's own**
 bundled/fetched pricing snapshot. This is a completely separate,
@@ -36,8 +36,8 @@ This fetches a fresh copy of LiteLLM's data, the only network access
 anywhere in this repo's own tooling (the plugin itself still never does
 this at runtime). Review the diff, and commit it.
 
-**Published-package path**: see the README's Setup section for the
-`npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing`
+**Published-package path**: see the README's Pricing data section for
+the `npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing`
 command, which does the same fetch without a repo checkout or a new
 release.
 

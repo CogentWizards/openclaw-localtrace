@@ -2,11 +2,11 @@
 
 All config lives under `plugins.entries.openclaw-localtrace.config.*`
 (and `hooks.allowConversationAccess`, a sibling of `config`, not inside
-it — see the [README](../README.md) for the three main opt-ins).
+it. See the [README](../README.md) for the three main opt-ins).
 Restart the Gateway after changing any of these.
 
 ```bash
-# Defaults to ~/.openclaw/openclaw-localtrace/traces/ if unset -- a
+# Defaults to ~/.openclaw/openclaw-localtrace/traces/ if unset. A
 # dedicated subdir, kept separate from this plugin's own singleton files
 # (e.g. pricing-table.json) that live one level up.
 openclaw config set plugins.entries.openclaw-localtrace.config.outputDir "/path/you/choose"
@@ -16,11 +16,11 @@ openclaw config set plugins.entries.openclaw-localtrace.config.maxAgeDays 14    
 
 # Tool names classified as a write/mutation on the openclaw.mutatingAction
 # span attribute. Defaults to a conservative built-in list (exec,
-# apply_patch, write_file, edit_file, delete_file) -- override if your
+# apply_patch, write_file, edit_file, delete_file). Override if your
 # deployment adds custom tools with side effects.
 openclaw config set plugins.entries.openclaw-localtrace.config.mutatingToolNames '["exec","apply_patch","my_custom_tool"]'
 
-# A local override path for the bundled pricing snapshot -- see docs/pricing.md.
+# A local override path for the bundled pricing snapshot. See docs/pricing.md.
 openclaw config set plugins.entries.openclaw-localtrace.config.pricingTableOverridePath "<path>"
 ```
 
