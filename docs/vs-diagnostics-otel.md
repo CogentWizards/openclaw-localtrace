@@ -1,4 +1,4 @@
-# Why this exists, and how it differs from `@openclaw/diagnostics-otel`
+# Why this plugin exists
 
 OpenClaw's own official exporter, `@openclaw/diagnostics-otel`,
 deliberately drops a specific set of identifiers before anything is
@@ -27,7 +27,7 @@ session identifiers to a SaaS vendor.
 This is not a drop-in replacement for `@openclaw/diagnostics-otel`. The
 two make different, deliberate tradeoffs. You can run both at once.
 
-## Why hooks, not the internal diagnostics bus
+## Hooks, not the diagnostics bus
 
 This plugin is built entirely on OpenClaw's typed **plugin hooks**
 (`api.on(...)`), not the internal diagnostics bus
