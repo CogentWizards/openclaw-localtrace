@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40cogentwizards%2Fopenclaw-localtrace.svg)](https://www.npmjs.com/package/@cogentwizards/openclaw-localtrace)
 [![CI](https://github.com/CogentWizards/openclaw-localtrace/actions/workflows/ci.yml/badge.svg)](https://github.com/CogentWizards/openclaw-localtrace/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/CogentWizards/openclaw-localtrace/blob/main/LICENSE)
 
 Full-fidelity OpenTelemetry capture for [OpenClaw](https://openclaw.ai), written only to your local filesystem. No redaction, no network export, no third-party backend.
 
@@ -17,7 +17,7 @@ Full-fidelity OpenTelemetry capture for [OpenClaw](https://openclaw.ai), written
     "openclaw.sessionId": "sess_abc123" } }
 ```
 
-Real output from this plugin's own `SpanMapper`, not a mockup. Full comparison with the official exporter: [docs/vs-diagnostics-otel.md](docs/vs-diagnostics-otel.md). Not a drop-in replacement, you can run both plugins at once.
+Real output from this plugin's own `SpanMapper`, not a mockup. Full comparison with the official exporter: [docs/vs-diagnostics-otel.md](https://github.com/CogentWizards/openclaw-localtrace/blob/main/docs/vs-diagnostics-otel.md). Not a drop-in replacement, you can run both plugins at once.
 
 ## Install
 
@@ -87,13 +87,13 @@ Every `llm.call` span carries a cost estimate from this plugin's own bundled pri
 npx -p @cogentwizards/openclaw-localtrace openclaw-localtrace-update-pricing
 ```
 
-Full detail: [docs/pricing.md](docs/pricing.md).
+Full detail: [docs/pricing.md](https://github.com/CogentWizards/openclaw-localtrace/blob/main/docs/pricing.md).
 
 ## Docs
 
-- [docs/vs-diagnostics-otel.md](docs/vs-diagnostics-otel.md): why this plugin exists, and why hooks instead of the internal diagnostics bus
-- [docs/pricing.md](docs/pricing.md): how cost estimates work, and how to refresh the bundled pricing table
-- [docs/config.md](docs/config.md): every config key, plus how local retention and cleanup work
+- [docs/vs-diagnostics-otel.md](https://github.com/CogentWizards/openclaw-localtrace/blob/main/docs/vs-diagnostics-otel.md): why this plugin exists, and why hooks instead of the internal diagnostics bus
+- [docs/pricing.md](https://github.com/CogentWizards/openclaw-localtrace/blob/main/docs/pricing.md): how cost estimates work, and how to refresh the bundled pricing table
+- [docs/config.md](https://github.com/CogentWizards/openclaw-localtrace/blob/main/docs/config.md): every config key, plus how local retention and cleanup work
 
 ## Development
 
@@ -107,4 +107,4 @@ No live Gateway or network access needed. The span-construction logic is tested 
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/CogentWizards/openclaw-localtrace/blob/main/LICENSE).
