@@ -1,6 +1,6 @@
 {
   "name": "@cogentwizards/openclaw-localtrace",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Full-fidelity OpenTelemetry capture for OpenClaw, written to your local filesystem only -- no redaction, no network export, no third-party backend.",
   "repository": {
     "type": "git",
@@ -38,7 +38,9 @@
     "@types/node": "^26.0.0"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "install": {
       "npmSpec": "@cogentwizards/openclaw-localtrace",
       "defaultChoice": "npm",
@@ -51,11 +53,18 @@
       "openclawVersion": "2026.9.3"
     }
   },
-  "files": ["dist/**", "openclaw.plugin.json", "README.md", "LICENSE"],
+  "files": [
+    "dist/**",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
   "peerDependencies": {
     "openclaw": ">=2026.9.3"
   },
   "peerDependenciesMeta": {
-    "openclaw": { "optional": true }
+    "openclaw": {
+      "optional": true
+    }
   }
 }
