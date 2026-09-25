@@ -193,6 +193,22 @@ test("SpanMapper: llm.call nests under an open run span for the same runId", () 
   assert.equal(llmCallSpan.parentSpanContext?.spanId, runSpan.spanContext().spanId);
 });
 
+test("SpanMapper: run span carries ctx.agentId when the host provides it", () => {
+  const { exporter, mapper } = harness();
+  mapper.onBeforeAgentRun({ prompt: "hi" }, { runId: "r1", agentId: "agentsmith" });
+  mapper.onAgentEnd({ success: true }, { runId: "r1" });
+  const runSpan = exporter.getFinishedSpans().find((s) => s.name === "openclaw-localtrace.run")!;
+  assert.equal(runSpan.attributes["openclaw.agentId"], "agentsmith");
+});
+
+test("SpanMapper: run span omits openclaw.agentId when the host doesn't provide one", () => {
+  const { exporter, mapper } = harness();
+  mapper.onBeforeAgentRun({ prompt: "hi" }, { runId: "r1" });
+  mapper.onAgentEnd({ success: true }, { runId: "r1" });
+  const runSpan = exporter.getFinishedSpans().find((s) => s.name === "openclaw-localtrace.run")!;
+  assert.equal(runSpan.attributes["openclaw.agentId"], undefined);
+});
+
 test("SpanMapper: before_tool_call/after_tool_call classifies mutatingAction from config, always kept regardless of captureIdentifiers", () => {
   const { exporter, mapper } = harness({ captureIdentifiers: false });
   mapper.onBeforeToolCall({ toolName: "exec", params: {}, runId: "r1" }, { toolCallId: "tc1" });

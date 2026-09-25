@@ -88,6 +88,15 @@ export interface AgentContext {
   channelId?: string;
   accountId?: string;
   channel?: string;
+  // Confirmed present on the real hook context object OpenClaw's CLI
+  // runner builds (cli-runner's own hookContext.agentId: params.agentId),
+  // even for a bare `openclaw agent --message ...` invocation with no
+  // channel/message provider at all -- unlike channel/channelId above,
+  // which are undefined in that case. Not part of any previously
+  // confirmed shape this module declared, added here specifically so
+  // redundo's own openclaw-localtrace adapter has a real agent identity
+  // to read regardless of whether a run is chat-routed.
+  agentId?: string;
 }
 
 export interface BeforeAgentRunEvent {
@@ -242,6 +251,7 @@ export class SpanMapper {
       {
         kind: SpanKind.INTERNAL,
         attributes: pruneUndefined({
+          "openclaw.agentId": ctx.agentId,
           "openclaw.channel": ctx.channel,
           "openclaw.channelId": ctx.channelId ?? event.channelId,
           ...this.identifierAttrs({
